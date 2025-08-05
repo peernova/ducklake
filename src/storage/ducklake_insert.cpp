@@ -41,7 +41,7 @@ DuckLakeInsert::DuckLakeInsert(PhysicalPlan &physical_plan, const vector<Logical
 // States
 //===--------------------------------------------------------------------===//
 DuckLakeInsertGlobalState::DuckLakeInsertGlobalState(DuckLakeTableEntry &table)
-    : table(table), total_insert_count(0), not_null_fields(table.GetNotNullFields()) {
+    : table(table), total_insert_count(0), not_null_fields(table.GetNotNullFields()), committed_snapshot_id(0) {
 }
 
 unique_ptr<GlobalSinkState> DuckLakeInsert::GetGlobalSinkState(ClientContext &context) const {
@@ -178,7 +178,8 @@ SinkResultType DuckLakeInsert::Sink(ExecutionContext &context, DataChunk &chunk,
 SourceResultType DuckLakeInsert::GetData(ExecutionContext &context, DataChunk &chunk,
                                          OperatorSourceInput &input) const {
 	auto &global_state = sink_state->Cast<DuckLakeInsertGlobalState>();
-	auto value = Value::BIGINT(NumericCast<int64_t>(global_state.total_insert_count));
+	// Return the snapshot ID instead of row count
+	auto value = Value::BIGINT(NumericCast<int64_t>(global_state.committed_snapshot_id));
 	chunk.SetCardinality(1);
 	chunk.SetValue(0, 0, value);
 	return SourceResultType::FINISHED;
@@ -195,6 +196,10 @@ SinkFinalizeType DuckLakeInsert::Finalize(Pipeline &pipeline, Event &event, Clie
 	}
 	auto &transaction = DuckLakeTransaction::Get(context, global_state.table.catalog);
 	transaction.AppendFiles(global_state.table.GetTableId(), std::move(global_state.written_files));
+
+	// Capture the snapshot ID that will be created by this transaction
+	auto current_snapshot = transaction.GetSnapshot();
+	global_state.committed_snapshot_id = current_snapshot.snapshot_id + 1;
 
 	return SinkFinalizeType::READY;
 }

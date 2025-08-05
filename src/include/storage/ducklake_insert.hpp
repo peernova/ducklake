@@ -34,6 +34,8 @@ public:
 	vector<DuckLakeDataFile> written_files;
 	idx_t total_insert_count;
 	case_insensitive_set_t not_null_fields;
+	//! The snapshot ID that will be created by this transaction
+	idx_t committed_snapshot_id;
 };
 
 class DuckLakeInsert : public PhysicalOperator {
