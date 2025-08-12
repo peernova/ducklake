@@ -58,6 +58,7 @@ public:
 	explicit DuckLakeDeleteGlobalState() {
 		written_columns["file_path"] = WrittenColumnInfo(LogicalType::VARCHAR, MultiFileReader::FILENAME_FIELD_ID);
 		written_columns["pos"] = WrittenColumnInfo(LogicalType::BIGINT, MultiFileReader::ORDINAL_FIELD_ID);
+		committed_snapshot_id = 0;
 	}
 
 	mutex lock;
@@ -66,6 +67,8 @@ public:
 	idx_t total_deleted_count = 0;
 	unordered_map<uint64_t, vector<idx_t>> deleted_rows;
 	unordered_map<idx_t, string> filenames;
+	//! The snapshot ID that will be created by this transaction
+	idx_t committed_snapshot_id;
 
 	void Flush(DuckLakeDeleteLocalState &local_state) {
 		auto &local_entry = local_state.file_row_numbers;
@@ -359,6 +362,11 @@ SinkFinalizeType DuckLakeDelete::Finalize(Pipeline &pipeline, Event &event, Clie
 		}
 	}
 	transaction.AddDeletes(table.GetTableId(), std::move(delete_files));
+
+	// Capture the snapshot ID that will be created by this transaction
+	auto current_snapshot = transaction.GetSnapshot();
+	global_state.committed_snapshot_id = current_snapshot.snapshot_id + 1;
+
 	return SinkFinalizeType::READY;
 }
 
@@ -368,7 +376,8 @@ SinkFinalizeType DuckLakeDelete::Finalize(Pipeline &pipeline, Event &event, Clie
 SourceResultType DuckLakeDelete::GetData(ExecutionContext &context, DataChunk &chunk,
                                          OperatorSourceInput &input) const {
 	auto &global_state = sink_state->Cast<DuckLakeDeleteGlobalState>();
-	auto value = Value::BIGINT(NumericCast<int64_t>(global_state.total_deleted_count));
+	// Return the snapshot ID instead of row count
+	auto value = Value::BIGINT(NumericCast<int64_t>(global_state.committed_snapshot_id));
 	chunk.SetCardinality(1);
 	chunk.SetValue(0, 0, value);
 	return SourceResultType::FINISHED;
