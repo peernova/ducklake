@@ -1,0 +1,83 @@
+# name: test/sql/branch/branch_debug.test
+# description: Debug test for branch isolation
+# group: [branch]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_debug_files')
+
+# create initial data on main branch
+statement ok
+CREATE TABLE ducklake.products(id INT, name VARCHAR)
+
+statement ok
+INSERT INTO ducklake.products VALUES (1, 'Product A')
+
+# check what snapshot main is at after insert (each operation creates a new snapshot)
+query II
+SELECT branch_name, snapshot_id FROM ducklake_branches('ducklake') ORDER BY branch_name
+----
+main	2
+
+# create a feature branch
+statement ok
+SELECT * FROM ducklake_create_branch('ducklake', 'feature')
+
+# verify both branches at same snapshot
+query II
+SELECT branch_name, snapshot_id FROM ducklake_branches('ducklake') ORDER BY branch_name
+----
+feature	2
+main	2
+
+# switch to feature
+statement ok
+SELECT * FROM ducklake_use_branch('ducklake', 'feature')
+
+# verify current branch
+query I
+SELECT * FROM ducklake_current_branch('ducklake')
+----
+feature
+
+# insert on feature
+statement ok
+INSERT INTO ducklake.products VALUES (2, 'Feature Product')
+
+# check snapshots after insert on feature
+# feature should advance, main should stay the same
+query II
+SELECT branch_name, snapshot_id FROM ducklake_branches('ducklake') ORDER BY branch_name
+----
+feature	3
+main	2
+
+# switch back to main
+statement ok
+SELECT * FROM ducklake_use_branch('ducklake', 'main')
+
+# verify current branch is main
+query I
+SELECT * FROM ducklake_current_branch('ducklake')
+----
+main
+
+# main is at snapshot 2, feature is at snapshot 3
+# querying on main should only show data with begin_snapshot <= 2
+# Product A was inserted at snapshot 2
+# Feature Product was inserted at snapshot 3 (should NOT be visible)
+query II
+SELECT * FROM ducklake.products ORDER BY id
+----
+1	Product A
+
+# clean up
+statement ok
+SELECT * FROM ducklake_drop_branch('ducklake', 'feature')

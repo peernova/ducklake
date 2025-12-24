@@ -1,0 +1,114 @@
+# name: test/sql/branch/branch_merge.test
+# description: Test branch merging in DuckLake
+# group: [branch]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_merge_files')
+
+# create initial data on main
+statement ok
+CREATE TABLE ducklake.products(id INT, name VARCHAR)
+
+statement ok
+INSERT INTO ducklake.products VALUES (1, 'Product A')
+
+# create a feature branch from the current state
+statement ok
+SELECT * FROM ducklake_create_branch('ducklake', 'feature', description := 'Feature development branch')
+
+# at this point both branches are at the same snapshot
+query I
+SELECT (SELECT snapshot_id FROM ducklake_branches('ducklake') WHERE branch_name = 'feature') = (SELECT snapshot_id FROM ducklake_branches('ducklake') WHERE branch_name = 'main')
+----
+true
+
+# switch to feature branch and make changes there
+statement ok
+SELECT * FROM ducklake_use_branch('ducklake', 'feature')
+
+statement ok
+INSERT INTO ducklake.products VALUES (2, 'Feature Product')
+
+# now feature branch should be ahead of main
+query I
+SELECT (SELECT snapshot_id FROM ducklake_branches('ducklake') WHERE branch_name = 'feature') > (SELECT snapshot_id FROM ducklake_branches('ducklake') WHERE branch_name = 'main')
+----
+true
+
+# switch back to main
+statement ok
+SELECT * FROM ducklake_use_branch('ducklake', 'main')
+
+# main should only have 1 product (isolation working)
+query II
+SELECT * FROM ducklake.products ORDER BY id
+----
+1	Product A
+
+# verify both branches exist
+query I
+SELECT COUNT(*) FROM ducklake_branches('ducklake')
+----
+2
+
+# test merging feature into main (feature is ahead of main, so this should work)
+query IIII
+SELECT merged, source_snapshot > 0, target_snapshot > 0, conflicts IS NULL FROM ducklake_merge_branch('ducklake', 'feature', target := 'main')
+----
+true	true	true	true
+
+# verify main branch snapshot is now updated to match feature
+query I
+SELECT b1.snapshot_id = b2.snapshot_id FROM ducklake_branches('ducklake') b1, ducklake_branches('ducklake') b2 WHERE b1.branch_name = 'main' AND b2.branch_name = 'feature'
+----
+true
+
+# after merge, main should now see the feature data
+query II
+SELECT * FROM ducklake.products ORDER BY id
+----
+1	Product A
+2	Feature Product
+
+# dry run doesn't actually merge
+statement ok
+SELECT * FROM ducklake_create_branch('ducklake', 'test_dry', snapshot_id := 0)
+
+# get the feature snapshot for comparison
+query I
+SELECT merged FROM ducklake_merge_branch('ducklake', 'feature', target := 'test_dry', dry_run := true)
+----
+true
+
+# verify dry run didn't change the snapshot
+query I
+SELECT snapshot_id FROM ducklake_branches('ducklake') WHERE branch_name = 'test_dry'
+----
+0
+
+# merge non-existent source branch should fail
+statement error
+SELECT * FROM ducklake_merge_branch('ducklake', 'nonexistent', target := 'main')
+----
+does not exist
+
+# merge into non-existent target branch should fail
+statement error
+SELECT * FROM ducklake_merge_branch('ducklake', 'main', target := 'nonexistent')
+----
+does not exist
+
+# clean up
+statement ok
+SELECT * FROM ducklake_drop_branch('ducklake', 'feature')
+
+statement ok
+SELECT * FROM ducklake_drop_branch('ducklake', 'test_dry')

@@ -1,0 +1,136 @@
+# name: test/sql/branch/branch_basic.test
+# description: Test basic branching support in DuckLake
+# group: [branch]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_branch_files')
+
+# verify initial branch state - main branch should exist
+query IIII
+SELECT branch_name, snapshot_id, created_by, description FROM ducklake_branches('ducklake')
+----
+main	0	NULL	Default main branch
+
+# verify current branch is main
+query I
+SELECT * FROM ducklake_current_branch('ducklake')
+----
+main
+
+# create a table and insert some data
+statement ok
+CREATE TABLE ducklake.test_table(id INT, value VARCHAR)
+
+statement ok
+INSERT INTO ducklake.test_table VALUES (1, 'initial')
+
+# get the current snapshot ID (should be 1 after the insert)
+query I
+SELECT snapshot_id > 0 FROM ducklake_snapshots('ducklake') ORDER BY snapshot_id DESC LIMIT 1
+----
+true
+
+# create a new branch from the current snapshot
+statement ok
+SELECT * FROM ducklake_create_branch('ducklake', 'feature_branch', description := 'A feature branch')
+
+# verify the new branch exists
+query II
+SELECT branch_name, description FROM ducklake_branches('ducklake') ORDER BY branch_name
+----
+feature_branch	A feature branch
+main	Default main branch
+
+# insert more data on main
+statement ok
+INSERT INTO ducklake.test_table VALUES (2, 'on main')
+
+query II
+SELECT * FROM ducklake.test_table ORDER BY id
+----
+1	initial
+2	on main
+
+# create another branch from a specific snapshot
+statement ok
+SELECT * FROM ducklake_create_branch('ducklake', 'old_branch', snapshot_id := 0)
+
+query I
+SELECT COUNT(*) FROM ducklake_branches('ducklake')
+----
+3
+
+# attempt to create a duplicate branch should fail
+statement error
+SELECT * FROM ducklake_create_branch('ducklake', 'feature_branch')
+----
+already exists
+
+# switch to the feature branch
+statement ok
+SELECT * FROM ducklake_use_branch('ducklake', 'feature_branch')
+
+# verify the current branch changed
+query I
+SELECT * FROM ducklake_current_branch('ducklake')
+----
+feature_branch
+
+# switch back to main
+statement ok
+SELECT * FROM ducklake_use_branch('ducklake', 'main')
+
+query I
+SELECT * FROM ducklake_current_branch('ducklake')
+----
+main
+
+# cannot switch to a non-existent branch
+statement error
+SELECT * FROM ducklake_use_branch('ducklake', 'nonexistent')
+----
+does not exist
+
+# drop a branch
+statement ok
+SELECT * FROM ducklake_drop_branch('ducklake', 'old_branch')
+
+query I
+SELECT COUNT(*) FROM ducklake_branches('ducklake')
+----
+2
+
+# cannot drop main branch
+statement error
+SELECT * FROM ducklake_drop_branch('ducklake', 'main')
+----
+Cannot drop the 'main' branch
+
+# cannot drop non-existent branch
+statement error
+SELECT * FROM ducklake_drop_branch('ducklake', 'nonexistent')
+----
+does not exist
+
+# drop with if_exists doesn't error on non-existent branch
+query I
+SELECT * FROM ducklake_drop_branch('ducklake', 'nonexistent', if_exists := true)
+----
+false
+
+# clean up
+statement ok
+SELECT * FROM ducklake_drop_branch('ducklake', 'feature_branch')
+
+query I
+SELECT branch_name FROM ducklake_branches('ducklake')
+----
+main

@@ -1,0 +1,83 @@
+# name: test/sql/branch/branch_isolation.test
+# description: Test branch isolation in DuckLake
+# group: [branch]
+#
+# NOTE: DuckLake provides "point-in-time" isolation via snapshot pointers.
+# Each branch points to a specific snapshot. Data created AFTER that snapshot
+# is not visible when querying on that branch. However, once a branch advances
+# past another branch's snapshot, it will see that data.
+#
+# True "parallel development" isolation (like git branches) would require
+# tracking which branch created each snapshot, which is not yet implemented.
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION __TEST_DIR__/{UUID}.db
+
+test-env DATA_PATH __TEST_DIR__
+
+statement ok
+ATTACH 'ducklake:${DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '${DATA_PATH}/ducklake_isolation_files')
+
+# create initial data on main branch
+statement ok
+CREATE TABLE ducklake.products(id INT, name VARCHAR)
+
+statement ok
+INSERT INTO ducklake.products VALUES (1, 'Product A')
+
+# verify initial data and snapshot
+query II
+SELECT * FROM ducklake.products ORDER BY id
+----
+1	Product A
+
+# create a feature branch from the current state
+statement ok
+SELECT * FROM ducklake_create_branch('ducklake', 'feature', description := 'Feature branch')
+
+# switch to feature branch
+statement ok
+SELECT * FROM ducklake_use_branch('ducklake', 'feature')
+
+# insert data on feature branch
+statement ok
+INSERT INTO ducklake.products VALUES (2, 'Feature Product')
+
+# verify feature branch sees its data
+query II
+SELECT * FROM ducklake.products ORDER BY id
+----
+1	Product A
+2	Feature Product
+
+# switch back to main branch
+statement ok
+SELECT * FROM ducklake_use_branch('ducklake', 'main')
+
+# main branch should NOT see the feature branch data
+# because main's snapshot (2) < feature product's begin_snapshot (3)
+query II
+SELECT * FROM ducklake.products ORDER BY id
+----
+1	Product A
+
+# switch to feature branch
+statement ok
+SELECT * FROM ducklake_use_branch('ducklake', 'feature')
+
+# feature branch still sees only its own data
+query II
+SELECT * FROM ducklake.products ORDER BY id
+----
+1	Product A
+2	Feature Product
+
+# clean up
+statement ok
+SELECT * FROM ducklake_use_branch('ducklake', 'main')
+
+statement ok
+SELECT * FROM ducklake_drop_branch('ducklake', 'feature')
