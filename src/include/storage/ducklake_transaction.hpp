@@ -78,6 +78,10 @@ public:
 	DuckLakeSnapshot GetSnapshot();
 	DuckLakeSnapshot GetSnapshot(optional_ptr<BoundAtClause> at_clause,
 	                             SnapshotBound bound = SnapshotBound::UPPER_BOUND);
+	//! Invalidate the cached snapshot (called when switching branches)
+	void InvalidateCachedSnapshot();
+	//! Commit and restart the metadata transaction (used to persist branch changes immediately)
+	void CommitMetadataChanges();
 
 	static DuckLakeTransaction &Get(ClientContext &context, Catalog &catalog);
 

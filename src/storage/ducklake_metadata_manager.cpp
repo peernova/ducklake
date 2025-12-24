@@ -86,11 +86,13 @@ CREATE TABLE {METADATA_CATALOG}.ducklake_schema_versions(begin_snapshot BIGINT, 
 CREATE TABLE {METADATA_CATALOG}.ducklake_macro(schema_id BIGINT, macro_id BIGINT, macro_name VARCHAR, begin_snapshot BIGINT, end_snapshot BIGINT);
 CREATE TABLE {METADATA_CATALOG}.ducklake_macro_impl(macro_id BIGINT, impl_id BIGINT, dialect VARCHAR, sql VARCHAR, type VARCHAR);
 CREATE TABLE {METADATA_CATALOG}.ducklake_macro_parameters(macro_id BIGINT, impl_id BIGINT,column_id BIGINT, parameter_name VARCHAR, parameter_type VARCHAR, default_value VARCHAR, default_value_type VARCHAR);
+CREATE TABLE {METADATA_CATALOG}.ducklake_branch(branch_name VARCHAR PRIMARY KEY, snapshot_id BIGINT NOT NULL, created_at TIMESTAMPTZ NOT NULL, created_by VARCHAR, description VARCHAR);
 INSERT INTO {METADATA_CATALOG}.ducklake_schema_versions VALUES (0,0);
 INSERT INTO {METADATA_CATALOG}.ducklake_snapshot VALUES (0, NOW(), 0, 1, 0);
 INSERT INTO {METADATA_CATALOG}.ducklake_snapshot_changes VALUES (0, 'created_schema:"main"',  NULL, NULL, NULL);
 INSERT INTO {METADATA_CATALOG}.ducklake_metadata (key, value) VALUES ('version', '0.4-dev1'), ('created_by', 'DuckDB %s'), ('data_path', %s), ('encrypted', '%s');
 INSERT INTO {METADATA_CATALOG}.ducklake_schema VALUES (0, UUID(), 0, NULL, 'main', 'main/', true);
+INSERT INTO {METADATA_CATALOG}.ducklake_branch VALUES ('main', 0, NOW(), NULL, 'Default main branch');
 	)",
 	                                       DuckDB::SourceID(), SQLString(data_path), encryption_str);
 	// TODO: add
@@ -166,6 +168,15 @@ CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_macro_parameters(macro_
 ALTER TABLE {METADATA_CATALOG}.ducklake_column ADD COLUMN {IF_NOT_EXISTS} default_value_type VARCHAR DEFAULT 'literal';
 ALTER TABLE {METADATA_CATALOG}.ducklake_column ADD COLUMN {IF_NOT_EXISTS} default_value_dialect VARCHAR DEFAULT NULL;
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '0.4-dev1' WHERE key = 'version';
+	)";
+	ExecuteMigration(migrate_query, allow_failures);
+}
+
+void DuckLakeMetadataManager::MigrateV04(bool allow_failures) {
+	string migrate_query = R"(
+CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_branch(branch_name VARCHAR PRIMARY KEY, snapshot_id BIGINT NOT NULL, created_at TIMESTAMPTZ NOT NULL, created_by VARCHAR, description VARCHAR);
+INSERT INTO {METADATA_CATALOG}.ducklake_branch SELECT 'main', MAX(snapshot_id), NOW(), NULL, 'Default main branch' FROM {METADATA_CATALOG}.ducklake_snapshot WHERE NOT EXISTS (SELECT 1 FROM {METADATA_CATALOG}.ducklake_branch WHERE branch_name = 'main');
+UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '0.5-dev1' WHERE key = 'version';
 	)";
 	ExecuteMigration(migrate_query, allow_failures);
 }
@@ -2521,13 +2532,42 @@ string DuckLakeMetadataManager::GetLatestSnapshotQuery() const {
 }
 
 unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::GetSnapshot() {
-	auto result = transaction.Query(GetLatestSnapshotQuery());
+	// Get the current branch's snapshot_id
+	string current_branch = GetCurrentBranch();
+	auto branch = GetBranch(current_branch);
+	if (!branch) {
+		// Fallback to latest snapshot if branch not found (shouldn't happen)
+		auto result = transaction.Query(GetLatestSnapshotQuery());
+		if (result->HasError()) {
+			result->GetErrorObject().Throw("Failed to query most recent snapshot for DuckLake: ");
+		}
+		auto snapshot = TryGetSnapshotInternal(*result);
+		if (!snapshot) {
+			throw InvalidInputException("No snapshot found in DuckLake");
+		}
+		return snapshot;
+	}
+
+	// Query the snapshot at the branch's snapshot_id
+	auto result = transaction.Query(StringUtil::Format(R"(
+SELECT snapshot_id, schema_version, next_catalog_id, next_file_id
+FROM {METADATA_CATALOG}.ducklake_snapshot
+WHERE snapshot_id = %llu
+)", branch->snapshot_id));
 	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to query most recent snapshot for DuckLake: ");
+		result->GetErrorObject().Throw("Failed to query snapshot for branch: ");
 	}
 	auto snapshot = TryGetSnapshotInternal(*result);
 	if (!snapshot) {
-		throw InvalidInputException("No snapshot found in DuckLake");
+		// Branch points to non-existent snapshot, fall back to latest
+		auto fallback_result = transaction.Query(GetLatestSnapshotQuery());
+		if (fallback_result->HasError()) {
+			fallback_result->GetErrorObject().Throw("Failed to query most recent snapshot for DuckLake: ");
+		}
+		snapshot = TryGetSnapshotInternal(*fallback_result);
+		if (!snapshot) {
+			throw InvalidInputException("No snapshot found in DuckLake");
+		}
 	}
 	return snapshot;
 }
@@ -3408,6 +3448,206 @@ UPDATE {METADATA_CATALOG}.ducklake_metadata SET value=%s WHERE key=%s AND %s
 
 bool DuckLakeMetadataManager::IsEncrypted() const {
 	return transaction.GetCatalog().Encryption() == DuckLakeEncryption::ENCRYPTED;
+}
+
+//===--------------------------------------------------------------------===//
+// Branch Operations
+//===--------------------------------------------------------------------===//
+
+vector<DuckLakeBranchInfo> DuckLakeMetadataManager::GetAllBranches() {
+	auto result = transaction.Query(R"(
+SELECT branch_name, snapshot_id, created_at, created_by, description
+FROM {METADATA_CATALOG}.ducklake_branch
+ORDER BY branch_name
+)");
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to get branch information from DuckLake: ");
+	}
+	auto context = transaction.context.lock();
+	vector<DuckLakeBranchInfo> branches;
+	for (auto &row : *result) {
+		DuckLakeBranchInfo branch_info;
+		branch_info.name = row.GetValue<string>(0);
+		branch_info.snapshot_id = row.GetValue<idx_t>(1);
+		auto created_at_val = row.GetChunk().GetValue(2, row.GetRowInChunk());
+		branch_info.created_at = created_at_val.CastAs(*context, LogicalType::TIMESTAMP_TZ).GetValue<timestamp_tz_t>();
+		branch_info.created_by = row.GetChunk().GetValue(3, row.GetRowInChunk());
+		branch_info.description = row.GetChunk().GetValue(4, row.GetRowInChunk());
+		branches.push_back(std::move(branch_info));
+	}
+	return branches;
+}
+
+optional_ptr<DuckLakeBranchInfo> DuckLakeMetadataManager::GetBranch(const string &branch_name) {
+	auto result = transaction.Query(StringUtil::Format(R"(
+SELECT branch_name, snapshot_id, created_at, created_by, description
+FROM {METADATA_CATALOG}.ducklake_branch
+WHERE branch_name = %s
+)", KeywordHelper::WriteQuoted(branch_name, '\'')));
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to get branch information from DuckLake: ");
+	}
+	auto context = transaction.context.lock();
+	for (auto &row : *result) {
+		// Store in member variable for lifetime management
+		cached_branch_info = make_uniq<DuckLakeBranchInfo>();
+		cached_branch_info->name = row.GetValue<string>(0);
+		cached_branch_info->snapshot_id = row.GetValue<idx_t>(1);
+		auto created_at_val = row.GetChunk().GetValue(2, row.GetRowInChunk());
+		cached_branch_info->created_at = created_at_val.CastAs(*context, LogicalType::TIMESTAMP_TZ).GetValue<timestamp_tz_t>();
+		cached_branch_info->created_by = row.GetChunk().GetValue(3, row.GetRowInChunk());
+		cached_branch_info->description = row.GetChunk().GetValue(4, row.GetRowInChunk());
+		return cached_branch_info.get();
+	}
+	return nullptr;
+}
+
+void DuckLakeMetadataManager::CreateBranch(const string &branch_name, idx_t snapshot_id, const Value &created_by,
+                                           const Value &description) {
+	// Verify the snapshot exists
+	auto result = transaction.Query(StringUtil::Format(R"(
+SELECT snapshot_id FROM {METADATA_CATALOG}.ducklake_snapshot WHERE snapshot_id = %llu
+)", snapshot_id));
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to verify snapshot for branch creation: ");
+	}
+	bool found = false;
+	for (auto &row : *result) {
+		(void)row;
+		found = true;
+	}
+	if (!found) {
+		throw InvalidInputException("Cannot create branch '%s': snapshot %llu does not exist", branch_name, snapshot_id);
+	}
+
+	// Insert the new branch - the PRIMARY KEY constraint will prevent duplicates
+	result = transaction.Query(StringUtil::Format(R"(
+INSERT INTO {METADATA_CATALOG}.ducklake_branch VALUES (%s, %llu, NOW(), %s, %s)
+)", KeywordHelper::WriteQuoted(branch_name, '\''), snapshot_id, created_by.ToSQLString(), description.ToSQLString()));
+	if (result->HasError()) {
+		auto &error = result->GetErrorObject();
+		// Check if this is a duplicate key error
+		if (StringUtil::Contains(error.Message(), "duplicate key") ||
+		    StringUtil::Contains(error.Message(), "Duplicate key") ||
+		    StringUtil::Contains(error.Message(), "PRIMARY KEY") ||
+		    StringUtil::Contains(error.Message(), "UNIQUE")) {
+			throw InvalidInputException("Branch '%s' already exists", branch_name);
+		}
+		error.Throw("Failed to create branch in DuckLake: ");
+	}
+}
+
+void DuckLakeMetadataManager::DropBranch(const string &branch_name) {
+	// Cannot drop the main branch
+	if (StringUtil::CIEquals(branch_name, "main")) {
+		throw InvalidInputException("Cannot drop the 'main' branch");
+	}
+
+	// Check if branch exists
+	auto existing = GetBranch(branch_name);
+	if (!existing) {
+		throw InvalidInputException("Branch '%s' does not exist", branch_name);
+	}
+
+	// Check if this is the current branch
+	auto current = GetCurrentBranch();
+	if (StringUtil::CIEquals(branch_name, current)) {
+		throw InvalidInputException("Cannot drop the current branch '%s'. Switch to another branch first.", branch_name);
+	}
+
+	auto result = transaction.Query(StringUtil::Format(R"(
+DELETE FROM {METADATA_CATALOG}.ducklake_branch WHERE branch_name = %s
+)", KeywordHelper::WriteQuoted(branch_name, '\'')));
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to drop branch from DuckLake: ");
+	}
+}
+
+void DuckLakeMetadataManager::UpdateBranch(const string &branch_name, idx_t new_snapshot_id) {
+	// Verify the snapshot exists
+	auto result = transaction.Query(StringUtil::Format(R"(
+SELECT snapshot_id FROM {METADATA_CATALOG}.ducklake_snapshot WHERE snapshot_id = %llu
+)", new_snapshot_id));
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to verify snapshot for branch update: ");
+	}
+	bool found = false;
+	for (auto &row : *result) {
+		(void)row;
+		found = true;
+	}
+	if (!found) {
+		throw InvalidInputException("Cannot update branch '%s': snapshot %llu does not exist", branch_name, new_snapshot_id);
+	}
+
+	// Check if branch exists
+	auto existing = GetBranch(branch_name);
+	if (!existing) {
+		throw InvalidInputException("Branch '%s' does not exist", branch_name);
+	}
+
+	// Update the branch
+	result = transaction.Query(StringUtil::Format(R"(
+UPDATE {METADATA_CATALOG}.ducklake_branch SET snapshot_id = %llu WHERE branch_name = %s
+)", new_snapshot_id, KeywordHelper::WriteQuoted(branch_name, '\'')));
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to update branch in DuckLake: ");
+	}
+}
+
+string DuckLakeMetadataManager::GetCurrentBranch() {
+	auto result = transaction.Query(R"(
+SELECT value FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = 'current_branch'
+)");
+	if (result->HasError()) {
+		// If the metadata doesn't exist yet, default to 'main'
+		return "main";
+	}
+	for (auto &row : *result) {
+		return row.GetValue<string>(0);
+	}
+	return "main";
+}
+
+void DuckLakeMetadataManager::SetCurrentBranch(const string &branch_name) {
+	// Verify the branch exists
+	auto existing = GetBranch(branch_name);
+	if (!existing) {
+		throw InvalidInputException("Branch '%s' does not exist", branch_name);
+	}
+
+	// Check if current_branch key exists
+	auto result = transaction.Query(R"(
+SELECT COUNT(*) FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = 'current_branch'
+)");
+	auto count = result->Fetch()->GetValue(0, 0).GetValue<idx_t>();
+	if (count == 0) {
+		// Insert new entry
+		result = transaction.Query(StringUtil::Format(R"(
+INSERT INTO {METADATA_CATALOG}.ducklake_metadata (key, value) VALUES ('current_branch', %s)
+)", KeywordHelper::WriteQuoted(branch_name, '\'')));
+	} else {
+		// Update existing entry
+		result = transaction.Query(StringUtil::Format(R"(
+UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = %s WHERE key = 'current_branch'
+)", KeywordHelper::WriteQuoted(branch_name, '\'')));
+	}
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to set current branch in DuckLake: ");
+	}
+}
+
+string DuckLakeMetadataManager::UpdateCurrentBranchSnapshotQuery() {
+	// Get the current branch name
+	string current_branch = GetCurrentBranch();
+
+	// Return the SQL to update the branch's snapshot_id to the new snapshot
+	// {SNAPSHOT_ID} will be replaced by the commit snapshot ID during execution
+	return StringUtil::Format(R"(
+UPDATE {METADATA_CATALOG}.ducklake_branch
+SET snapshot_id = {SNAPSHOT_ID}
+WHERE branch_name = %s;
+)", KeywordHelper::WriteQuoted(current_branch, '\''));
 }
 
 } // namespace duckdb

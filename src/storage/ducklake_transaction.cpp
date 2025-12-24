@@ -1691,6 +1691,9 @@ void DuckLakeTransaction::FlushChanges() {
 			// write the new snapshot
 			batch_queries += metadata_manager->InsertSnapshot();
 
+			// update the current branch to point to the new snapshot
+			batch_queries += metadata_manager->UpdateCurrentBranchSnapshotQuery();
+
 			batch_queries += WriteSnapshotChanges(commit_state, transaction_changes);
 			if (SchemaChangesMade()) {
 				// Insert our new schema in our table that tracks schema changes
@@ -1820,6 +1823,19 @@ DuckLakeSnapshot DuckLakeTransaction::GetSnapshot() {
 		snapshot = metadata_manager->GetSnapshot();
 	}
 	return *snapshot;
+}
+
+void DuckLakeTransaction::InvalidateCachedSnapshot() {
+	lock_guard<mutex> guard(snapshot_lock);
+	snapshot.reset();
+}
+
+void DuckLakeTransaction::CommitMetadataChanges() {
+	lock_guard<mutex> guard(connection_lock);
+	if (connection) {
+		connection->Commit();
+		connection->BeginTransaction();
+	}
 }
 
 DuckLakeSnapshot DuckLakeTransaction::GetSnapshot(optional_ptr<BoundAtClause> at_clause, SnapshotBound bound) {

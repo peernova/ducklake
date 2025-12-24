@@ -197,6 +197,17 @@ public:
 	virtual void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
 	virtual vector<DuckLakeTableSizeInfo> GetTableSizes(DuckLakeSnapshot snapshot);
 	virtual void SetConfigOption(const DuckLakeConfigOption &option);
+
+	//! Branch operations
+	virtual vector<DuckLakeBranchInfo> GetAllBranches();
+	virtual optional_ptr<DuckLakeBranchInfo> GetBranch(const string &branch_name);
+	virtual void CreateBranch(const string &branch_name, idx_t snapshot_id, const Value &created_by,
+	                          const Value &description);
+	virtual void DropBranch(const string &branch_name);
+	virtual void UpdateBranch(const string &branch_name, idx_t new_snapshot_id);
+	virtual string GetCurrentBranch();
+	virtual void SetCurrentBranch(const string &branch_name);
+	virtual string UpdateCurrentBranchSnapshotQuery();
 	virtual string GetPathForSchema(SchemaIndex schema_id, vector<DuckLakeSchemaInfo> &new_schemas_result);
 	virtual string GetPathForTable(TableIndex table_id, const vector<DuckLakeTableInfo> &new_tables,
 	                               const vector<DuckLakeSchemaInfo> &new_schemas_result);
@@ -204,6 +215,7 @@ public:
 	virtual void MigrateV01();
 	virtual void MigrateV02(bool allow_failures = false);
 	virtual void MigrateV03(bool allow_failures = false);
+	virtual void MigrateV04(bool allow_failures = false);
 	virtual void ExecuteMigration(string migrate_query, bool allow_failures);
 
 	string LoadPath(string path);
@@ -260,6 +272,8 @@ private:
 
 private:
 	unordered_map<idx_t, string> inlined_table_name_cache;
+	//! Cached branch info for GetBranch lifetime management
+	unique_ptr<DuckLakeBranchInfo> cached_branch_info;
 
 protected:
 	DuckLakeTransaction &transaction;

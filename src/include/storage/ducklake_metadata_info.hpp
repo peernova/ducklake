@@ -431,6 +431,19 @@ struct DuckLakeSnapshotCommit {
 	bool is_commit_info_set = false;
 };
 
+struct DuckLakeBranchInfo {
+	//! Name of the branch
+	string name;
+	//! The snapshot this branch points to
+	idx_t snapshot_id;
+	//! When the branch was created
+	timestamp_tz_t created_at;
+	//! Who created the branch
+	Value created_by;
+	//! Description of the branch
+	Value description;
+};
+
 struct DuckLakeConfigOption {
 	DuckLakeTag option;
 	//! schema_id, if scoped to a schema
