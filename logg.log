@@ -1,0 +1,607 @@
+[DEBUG LookupSchema] schema_name=main, has_at_clause=no
+[DEBUG LookupSchema] Using snapshot_id=0, schema_version=0
+[DEBUG GetSchemaForSnapshot] snapshot_id=0, schema_version=0
+[DEBUG GetSchemaForSnapshot] Loading schema for version 0 from metadata manager
+[DEBUG GetSchemaForSnapshot] Loaded schema with 1 entries
+[DEBUG LookupSchema] Got schemas catalog set with 1 schema entries
+[DEBUG LookupSchema]   - schema: 'main'
+[DEBUG LookupSchema] Found schema 'main'
+[DEBUG LookupSchema] schema_name=main, has_at_clause=no
+[DEBUG LookupSchema] Using snapshot_id=0, schema_version=0
+[DEBUG GetSchemaForSnapshot] snapshot_id=0, schema_version=0
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 0 with 1 entries
+[DEBUG LookupSchema] Got schemas catalog set with 1 schema entries
+[DEBUG LookupSchema]   - schema: 'main'
+[DEBUG LookupSchema] Found schema 'main'
+[DEBUG LookupSchema] schema_name=main, has_at_clause=no
+[DEBUG LookupSchema] Using snapshot_id=0, schema_version=0
+[DEBUG GetSchemaForSnapshot] snapshot_id=0, schema_version=0
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 0 with 1 entries
+[DEBUG LookupSchema] Got schemas catalog set with 1 schema entries
+[DEBUG LookupSchema]   - schema: 'main'
+[DEBUG LookupSchema] Found schema 'main'
+[DEBUG LookupEntry] schema=main, entry_name=employees, catalog_type=Table, has_at_clause=no
+[DEBUG LookupEntry] actual_name=employees, branch_ref.HasBranch=no
+[DEBUG LookupEntry] Searching in catalog_set with 0 entries
+[DEBUG LookupEntry] Entry 'employees' NOT FOUND in catalog_set
+[DEBUG LookupEntry] Available entries in catalog_set:
+[DEBUG LookupEntry] schema=main, entry_name=employees, catalog_type=Table, has_at_clause=no
+[DEBUG LookupEntry] actual_name=employees, branch_ref.HasBranch=no
+[DEBUG LookupEntry] Searching in catalog_set with 0 entries
+[DEBUG LookupEntry] Entry 'employees' NOT FOUND in catalog_set
+[DEBUG LookupEntry] Available entries in catalog_set:
+[DEBUG GetSchemaForSnapshot] snapshot_id=0, schema_version=0
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 0 with 1 entries
+[DEBUG InsertNewSchema] branch_id=0, snapshot_id=1, schema_version=1
+[DEBUG LookupSchema] schema_name=main, has_at_clause=no
+[DEBUG LookupSchema] Using snapshot_id=1, schema_version=1
+[DEBUG GetSchemaForSnapshot] snapshot_id=1, schema_version=1
+[DEBUG GetSchemaForSnapshot] Loading schema for version 1 from metadata manager
+[DEBUG GetSchemaForSnapshot] Loaded schema with 1 entries
+[DEBUG LookupSchema] Got schemas catalog set with 1 schema entries
+[DEBUG LookupSchema]   - schema: 'main'
+[DEBUG LookupSchema] Found schema 'main'
+[DEBUG LookupEntry] schema=main, entry_name=employees, catalog_type=Table, has_at_clause=no
+[DEBUG LookupEntry] actual_name=employees, branch_ref.HasBranch=no
+[DEBUG LookupEntry] Searching in catalog_set with 1 entries
+[DEBUG LookupEntry] Found entry 'employees'
+[DEBUG GetSchemaForSnapshot] snapshot_id=1, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+[DEBUG GetSchemaForSnapshot] snapshot_id=1, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+[DEBUG LookupSchema] schema_name=main, has_at_clause=no
+[DEBUG LookupSchema] Using snapshot_id=2, schema_version=1
+[DEBUG GetSchemaForSnapshot] snapshot_id=2, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+[DEBUG LookupSchema] Got schemas catalog set with 1 schema entries
+[DEBUG LookupSchema]   - schema: 'main'
+[DEBUG LookupSchema] Found schema 'main'
+[DEBUG LookupEntry] schema=main, entry_name=employees, catalog_type=Table, has_at_clause=no
+[DEBUG LookupEntry] actual_name=employees, branch_ref.HasBranch=no
+[DEBUG LookupEntry] Searching in catalog_set with 1 entries
+[DEBUG LookupEntry] Found entry 'employees'
+[DEBUG LookupSchema] schema_name=main, has_at_clause=no
+[DEBUG LookupSchema] Using snapshot_id=2, schema_version=1
+[DEBUG GetSchemaForSnapshot] snapshot_id=2, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+[DEBUG LookupSchema] Got schemas catalog set with 1 schema entries
+[DEBUG LookupSchema]   - schema: 'main'
+[DEBUG LookupSchema] Found schema 'main'
+[DEBUG LookupEntry] schema=main, entry_name=count_star, catalog_type=Scalar Function, has_at_clause=no
+[DEBUG LookupEntry] actual_name=count_star, branch_ref.HasBranch=no
+[DEBUG LookupEntry] Searching in catalog_set with 0 entries
+[DEBUG LookupEntry] Entry 'count_star' NOT FOUND in catalog_set
+[DEBUG LookupEntry] Available entries in catalog_set:
+[DEBUG LookupSchema] schema_name=main, has_at_clause=no
+[DEBUG LookupSchema] Using snapshot_id=2, schema_version=1
+[DEBUG GetSchemaForSnapshot] snapshot_id=2, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+[DEBUG LookupSchema] Got schemas catalog set with 1 schema entries
+[DEBUG LookupSchema]   - schema: 'main'
+[DEBUG LookupSchema] Found schema 'main'
+[DEBUG LookupEntry] schema=main, entry_name=count_star, catalog_type=Scalar Function, has_at_clause=no
+[DEBUG LookupEntry] actual_name=count_star, branch_ref.HasBranch=no
+[DEBUG LookupEntry] Searching in catalog_set with 0 entries
+[DEBUG LookupEntry] Entry 'count_star' NOT FOUND in catalog_set
+[DEBUG LookupEntry] Available entries in catalog_set:
+[DEBUG LookupSchema] schema_name=main, has_at_clause=no
+[DEBUG LookupSchema] Using snapshot_id=2, schema_version=1
+[DEBUG GetSchemaForSnapshot] snapshot_id=2, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+[DEBUG LookupSchema] Got schemas catalog set with 1 schema entries
+[DEBUG LookupSchema]   - schema: 'main'
+[DEBUG LookupSchema] Found schema 'main'
+[DEBUG LookupEntry] schema=main, entry_name=count_star, catalog_type=Scalar Function, has_at_clause=no
+[DEBUG LookupEntry] actual_name=count_star, branch_ref.HasBranch=no
+[DEBUG LookupEntry] Searching in catalog_set with 0 entries
+[DEBUG LookupEntry] Entry 'count_star' NOT FOUND in catalog_set
+[DEBUG LookupEntry] Available entries in catalog_set:
+[DEBUG LookupSchema] schema_name=main, has_at_clause=no
+[DEBUG LookupSchema] Using snapshot_id=2, schema_version=1
+[DEBUG GetSchemaForSnapshot] snapshot_id=2, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+[DEBUG LookupSchema] Got schemas catalog set with 1 schema entries
+[DEBUG LookupSchema]   - schema: 'main'
+[DEBUG LookupSchema] Found schema 'main'
+[DEBUG LookupEntry] schema=main, entry_name=count_star, catalog_type=Scalar Function, has_at_clause=no
+[DEBUG LookupEntry] actual_name=count_star, branch_ref.HasBranch=no
+[DEBUG LookupEntry] Searching in catalog_set with 0 entries
+[DEBUG LookupEntry] Entry 'count_star' NOT FOUND in catalog_set
+[DEBUG LookupEntry] Available entries in catalog_set:
+[DEBUG GetSchemaForSnapshot] snapshot_id=2, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+[DEBUG GetSchemaForSnapshot] snapshot_id=2, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+┌────────────────────┬───────┐
+│        test        │  cnt  │
+│      varchar       │ int64 │
+├────────────────────┼───────┤
+│ Main before branch │     3 │
+└────────────────────┴───────┘
+[DEBUG LookupSchema] schema_name=main, has_at_clause=no
+[DEBUG LookupSchema] Using snapshot_id=2, schema_version=1
+[DEBUG GetSchemaForSnapshot] snapshot_id=2, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+[DEBUG LookupSchema] Got schemas catalog set with 1 schema entries
+[DEBUG LookupSchema]   - schema: 'main'
+[DEBUG LookupSchema] Found schema 'main'
+[DEBUG LookupEntry] schema=main, entry_name=ducklake_create_branch, catalog_type=Table Function, has_at_clause=no
+[DEBUG LookupEntry] actual_name=ducklake_create_branch, branch_ref.HasBranch=no
+[DEBUG LookupEntry] Searching in catalog_set with 0 entries
+[DEBUG LookupEntry] Entry 'ducklake_create_branch' NOT FOUND in catalog_set
+[DEBUG LookupEntry] Available entries in catalog_set:
+[DEBUG LookupSchema] schema_name=main, has_at_clause=no
+[DEBUG LookupSchema] Using snapshot_id=2, schema_version=1
+[DEBUG GetSchemaForSnapshot] snapshot_id=2, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+[DEBUG LookupSchema] Got schemas catalog set with 1 schema entries
+[DEBUG LookupSchema]   - schema: 'main'
+[DEBUG LookupSchema] Found schema 'main'
+[DEBUG LookupEntry] schema=main, entry_name=ducklake_create_branch, catalog_type=Table Function, has_at_clause=no
+[DEBUG LookupEntry] actual_name=ducklake_create_branch, branch_ref.HasBranch=no
+[DEBUG LookupEntry] Searching in catalog_set with 0 entries
+[DEBUG LookupEntry] Entry 'ducklake_create_branch' NOT FOUND in catalog_set
+[DEBUG LookupEntry] Available entries in catalog_set:
+┌───────────┬─────────────┬──────────────────┐
+│ branch_id │ branch_name │ head_snapshot_id │
+│   int64   │   varchar   │      int64       │
+├───────────┼─────────────┼──────────────────┤
+│         1 │ dev_branch  │                2 │
+└───────────┴─────────────┴──────────────────┘
+[DEBUG LookupSchema] schema_name=main, has_at_clause=no
+[DEBUG LookupSchema] Using snapshot_id=2, schema_version=1
+[DEBUG GetSchemaForSnapshot] snapshot_id=2, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+[DEBUG LookupSchema] Got schemas catalog set with 1 schema entries
+[DEBUG LookupSchema]   - schema: 'main'
+[DEBUG LookupSchema] Found schema 'main'
+[DEBUG LookupEntry] schema=main, entry_name=ducklake_use_branch, catalog_type=Table Function, has_at_clause=no
+[DEBUG LookupEntry] actual_name=ducklake_use_branch, branch_ref.HasBranch=no
+[DEBUG LookupEntry] Searching in catalog_set with 0 entries
+[DEBUG LookupEntry] Entry 'ducklake_use_branch' NOT FOUND in catalog_set
+[DEBUG LookupEntry] Available entries in catalog_set:
+[DEBUG LookupSchema] schema_name=main, has_at_clause=no
+[DEBUG LookupSchema] Using snapshot_id=2, schema_version=1
+[DEBUG GetSchemaForSnapshot] snapshot_id=2, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+[DEBUG LookupSchema] Got schemas catalog set with 1 schema entries
+[DEBUG LookupSchema]   - schema: 'main'
+[DEBUG LookupSchema] Found schema 'main'
+[DEBUG LookupEntry] schema=main, entry_name=ducklake_use_branch, catalog_type=Table Function, has_at_clause=no
+[DEBUG LookupEntry] actual_name=ducklake_use_branch, branch_ref.HasBranch=no
+[DEBUG LookupEntry] Searching in catalog_set with 0 entries
+[DEBUG LookupEntry] Entry 'ducklake_use_branch' NOT FOUND in catalog_set
+[DEBUG LookupEntry] Available entries in catalog_set:
+┌───────────┬─────────────┬───────────┬──────────────────┐
+│  catalog  │ branch_name │ branch_id │ head_snapshot_id │
+│  varchar  │   varchar   │   int64   │      int64       │
+├───────────┼─────────────┼───────────┼──────────────────┤
+│ test_lake │ dev_branch  │         1 │                2 │
+└───────────┴─────────────┴───────────┴──────────────────┘
+[DEBUG LookupSchema] schema_name=main, has_at_clause=no
+[DEBUG LookupSchema] Using snapshot_id=2, schema_version=1
+[DEBUG GetSchemaForSnapshot] snapshot_id=2, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+[DEBUG LookupSchema] Got schemas catalog set with 1 schema entries
+[DEBUG LookupSchema]   - schema: 'main'
+[DEBUG LookupSchema] Found schema 'main'
+[DEBUG LookupEntry] schema=main, entry_name=employees, catalog_type=Table, has_at_clause=no
+[DEBUG LookupEntry] actual_name=employees, branch_ref.HasBranch=no
+[DEBUG LookupEntry] Searching in catalog_set with 1 entries
+[DEBUG LookupEntry] Found entry 'employees'
+[DEBUG GetSchemaForSnapshot] snapshot_id=2, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+[DEBUG GetSchemaForSnapshot] snapshot_id=2, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+[DEBUG LookupSchema] schema_name=main, has_at_clause=no
+[DEBUG LookupSchema] Using snapshot_id=3, schema_version=1
+[DEBUG GetSchemaForSnapshot] snapshot_id=3, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+[DEBUG LookupSchema] Got schemas catalog set with 1 schema entries
+[DEBUG LookupSchema]   - schema: 'main'
+[DEBUG LookupSchema] Found schema 'main'
+[DEBUG LookupEntry] schema=main, entry_name=employees, catalog_type=Table, has_at_clause=no
+[DEBUG LookupEntry] actual_name=employees, branch_ref.HasBranch=no
+[DEBUG LookupEntry] Searching in catalog_set with 1 entries
+[DEBUG LookupEntry] Found entry 'employees'
+[DEBUG LookupSchema] schema_name=main, has_at_clause=no
+[DEBUG LookupSchema] Using snapshot_id=3, schema_version=1
+[DEBUG GetSchemaForSnapshot] snapshot_id=3, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+[DEBUG LookupSchema] Got schemas catalog set with 1 schema entries
+[DEBUG LookupSchema]   - schema: 'main'
+[DEBUG LookupSchema] Found schema 'main'
+[DEBUG LookupEntry] schema=main, entry_name=count_star, catalog_type=Scalar Function, has_at_clause=no
+[DEBUG LookupEntry] actual_name=count_star, branch_ref.HasBranch=no
+[DEBUG LookupEntry] Searching in catalog_set with 0 entries
+[DEBUG LookupEntry] Entry 'count_star' NOT FOUND in catalog_set
+[DEBUG LookupEntry] Available entries in catalog_set:
+[DEBUG LookupSchema] schema_name=main, has_at_clause=no
+[DEBUG LookupSchema] Using snapshot_id=3, schema_version=1
+[DEBUG GetSchemaForSnapshot] snapshot_id=3, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+[DEBUG LookupSchema] Got schemas catalog set with 1 schema entries
+[DEBUG LookupSchema]   - schema: 'main'
+[DEBUG LookupSchema] Found schema 'main'
+[DEBUG LookupEntry] schema=main, entry_name=count_star, catalog_type=Scalar Function, has_at_clause=no
+[DEBUG LookupEntry] actual_name=count_star, branch_ref.HasBranch=no
+[DEBUG LookupEntry] Searching in catalog_set with 0 entries
+[DEBUG LookupEntry] Entry 'count_star' NOT FOUND in catalog_set
+[DEBUG LookupEntry] Available entries in catalog_set:
+[DEBUG LookupSchema] schema_name=main, has_at_clause=no
+[DEBUG LookupSchema] Using snapshot_id=3, schema_version=1
+[DEBUG GetSchemaForSnapshot] snapshot_id=3, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+[DEBUG LookupSchema] Got schemas catalog set with 1 schema entries
+[DEBUG LookupSchema]   - schema: 'main'
+[DEBUG LookupSchema] Found schema 'main'
+[DEBUG LookupEntry] schema=main, entry_name=count_star, catalog_type=Scalar Function, has_at_clause=no
+[DEBUG LookupEntry] actual_name=count_star, branch_ref.HasBranch=no
+[DEBUG LookupEntry] Searching in catalog_set with 0 entries
+[DEBUG LookupEntry] Entry 'count_star' NOT FOUND in catalog_set
+[DEBUG LookupEntry] Available entries in catalog_set:
+[DEBUG LookupSchema] schema_name=main, has_at_clause=no
+[DEBUG LookupSchema] Using snapshot_id=3, schema_version=1
+[DEBUG GetSchemaForSnapshot] snapshot_id=3, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+[DEBUG LookupSchema] Got schemas catalog set with 1 schema entries
+[DEBUG LookupSchema]   - schema: 'main'
+[DEBUG LookupSchema] Found schema 'main'
+[DEBUG LookupEntry] schema=main, entry_name=count_star, catalog_type=Scalar Function, has_at_clause=no
+[DEBUG LookupEntry] actual_name=count_star, branch_ref.HasBranch=no
+[DEBUG LookupEntry] Searching in catalog_set with 0 entries
+[DEBUG LookupEntry] Entry 'count_star' NOT FOUND in catalog_set
+[DEBUG LookupEntry] Available entries in catalog_set:
+[DEBUG GetSchemaForSnapshot] snapshot_id=3, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+[DEBUG GetSchemaForSnapshot] snapshot_id=3, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+┌──────────────────┬───────┐
+│       test       │  cnt  │
+│     varchar      │ int64 │
+├──────────────────┼───────┤
+│ Dev after insert │     5 │
+└──────────────────┴───────┘
+[DEBUG LookupSchema] schema_name=main, has_at_clause=no
+[DEBUG LookupSchema] Using snapshot_id=3, schema_version=1
+[DEBUG GetSchemaForSnapshot] snapshot_id=3, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+[DEBUG LookupSchema] Got schemas catalog set with 1 schema entries
+[DEBUG LookupSchema]   - schema: 'main'
+[DEBUG LookupSchema] Found schema 'main'
+[DEBUG LookupEntry] schema=main, entry_name=ducklake_use_branch, catalog_type=Table Function, has_at_clause=no
+[DEBUG LookupEntry] actual_name=ducklake_use_branch, branch_ref.HasBranch=no
+[DEBUG LookupEntry] Searching in catalog_set with 0 entries
+[DEBUG LookupEntry] Entry 'ducklake_use_branch' NOT FOUND in catalog_set
+[DEBUG LookupEntry] Available entries in catalog_set:
+[DEBUG LookupSchema] schema_name=main, has_at_clause=no
+[DEBUG LookupSchema] Using snapshot_id=3, schema_version=1
+[DEBUG GetSchemaForSnapshot] snapshot_id=3, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+[DEBUG LookupSchema] Got schemas catalog set with 1 schema entries
+[DEBUG LookupSchema]   - schema: 'main'
+[DEBUG LookupSchema] Found schema 'main'
+[DEBUG LookupEntry] schema=main, entry_name=ducklake_use_branch, catalog_type=Table Function, has_at_clause=no
+[DEBUG LookupEntry] actual_name=ducklake_use_branch, branch_ref.HasBranch=no
+[DEBUG LookupEntry] Searching in catalog_set with 0 entries
+[DEBUG LookupEntry] Entry 'ducklake_use_branch' NOT FOUND in catalog_set
+[DEBUG LookupEntry] Available entries in catalog_set:
+┌───────────┬─────────────┬───────────┬──────────────────┐
+│  catalog  │ branch_name │ branch_id │ head_snapshot_id │
+│  varchar  │   varchar   │   int64   │      int64       │
+├───────────┼─────────────┼───────────┼──────────────────┤
+│ test_lake │ main        │         0 │                2 │
+└───────────┴─────────────┴───────────┴──────────────────┘
+[DEBUG LookupSchema] schema_name=main, has_at_clause=no
+[DEBUG LookupSchema] Using snapshot_id=2, schema_version=1
+[DEBUG GetSchemaForSnapshot] snapshot_id=2, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+[DEBUG LookupSchema] Got schemas catalog set with 1 schema entries
+[DEBUG LookupSchema]   - schema: 'main'
+[DEBUG LookupSchema] Found schema 'main'
+[DEBUG LookupEntry] schema=main, entry_name=employees, catalog_type=Table, has_at_clause=no
+[DEBUG LookupEntry] actual_name=employees, branch_ref.HasBranch=no
+[DEBUG LookupEntry] Searching in catalog_set with 1 entries
+[DEBUG LookupEntry] Found entry 'employees'
+[DEBUG LookupSchema] schema_name=main, has_at_clause=no
+[DEBUG LookupSchema] Using snapshot_id=2, schema_version=1
+[DEBUG GetSchemaForSnapshot] snapshot_id=2, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+[DEBUG LookupSchema] Got schemas catalog set with 1 schema entries
+[DEBUG LookupSchema]   - schema: 'main'
+[DEBUG LookupSchema] Found schema 'main'
+[DEBUG LookupEntry] schema=main, entry_name=count_star, catalog_type=Scalar Function, has_at_clause=no
+[DEBUG LookupEntry] actual_name=count_star, branch_ref.HasBranch=no
+[DEBUG LookupEntry] Searching in catalog_set with 0 entries
+[DEBUG LookupEntry] Entry 'count_star' NOT FOUND in catalog_set
+[DEBUG LookupEntry] Available entries in catalog_set:
+[DEBUG LookupSchema] schema_name=main, has_at_clause=no
+[DEBUG LookupSchema] Using snapshot_id=2, schema_version=1
+[DEBUG GetSchemaForSnapshot] snapshot_id=2, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+[DEBUG LookupSchema] Got schemas catalog set with 1 schema entries
+[DEBUG LookupSchema]   - schema: 'main'
+[DEBUG LookupSchema] Found schema 'main'
+[DEBUG LookupEntry] schema=main, entry_name=count_star, catalog_type=Scalar Function, has_at_clause=no
+[DEBUG LookupEntry] actual_name=count_star, branch_ref.HasBranch=no
+[DEBUG LookupEntry] Searching in catalog_set with 0 entries
+[DEBUG LookupEntry] Entry 'count_star' NOT FOUND in catalog_set
+[DEBUG LookupEntry] Available entries in catalog_set:
+[DEBUG LookupSchema] schema_name=main, has_at_clause=no
+[DEBUG LookupSchema] Using snapshot_id=2, schema_version=1
+[DEBUG GetSchemaForSnapshot] snapshot_id=2, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+[DEBUG LookupSchema] Got schemas catalog set with 1 schema entries
+[DEBUG LookupSchema]   - schema: 'main'
+[DEBUG LookupSchema] Found schema 'main'
+[DEBUG LookupEntry] schema=main, entry_name=count_star, catalog_type=Scalar Function, has_at_clause=no
+[DEBUG LookupEntry] actual_name=count_star, branch_ref.HasBranch=no
+[DEBUG LookupEntry] Searching in catalog_set with 0 entries
+[DEBUG LookupEntry] Entry 'count_star' NOT FOUND in catalog_set
+[DEBUG LookupEntry] Available entries in catalog_set:
+[DEBUG LookupSchema] schema_name=main, has_at_clause=no
+[DEBUG LookupSchema] Using snapshot_id=2, schema_version=1
+[DEBUG GetSchemaForSnapshot] snapshot_id=2, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+[DEBUG LookupSchema] Got schemas catalog set with 1 schema entries
+[DEBUG LookupSchema]   - schema: 'main'
+[DEBUG LookupSchema] Found schema 'main'
+[DEBUG LookupEntry] schema=main, entry_name=count_star, catalog_type=Scalar Function, has_at_clause=no
+[DEBUG LookupEntry] actual_name=count_star, branch_ref.HasBranch=no
+[DEBUG LookupEntry] Searching in catalog_set with 0 entries
+[DEBUG LookupEntry] Entry 'count_star' NOT FOUND in catalog_set
+[DEBUG LookupEntry] Available entries in catalog_set:
+[DEBUG GetSchemaForSnapshot] snapshot_id=2, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+[DEBUG GetSchemaForSnapshot] snapshot_id=2, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+┌─────────────────────────────────────────┬───────┐
+│                  test                   │  cnt  │
+│                 varchar                 │ int64 │
+├─────────────────────────────────────────┼───────┤
+│ Main after switching back (SHOULD BE 3) │     3 │
+└─────────────────────────────────────────┴───────┘
+┌───────────────────┐
+│       info        │
+│      varchar      │
+├───────────────────┤
+│ Main branch data: │
+└───────────────────┘
+[DEBUG LookupSchema] schema_name=main, has_at_clause=no
+[DEBUG LookupSchema] Using snapshot_id=2, schema_version=1
+[DEBUG GetSchemaForSnapshot] snapshot_id=2, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+[DEBUG LookupSchema] Got schemas catalog set with 1 schema entries
+[DEBUG LookupSchema]   - schema: 'main'
+[DEBUG LookupSchema] Found schema 'main'
+[DEBUG LookupEntry] schema=main, entry_name=employees, catalog_type=Table, has_at_clause=no
+[DEBUG LookupEntry] actual_name=employees, branch_ref.HasBranch=no
+[DEBUG LookupEntry] Searching in catalog_set with 1 entries
+[DEBUG LookupEntry] Found entry 'employees'
+[DEBUG GetSchemaForSnapshot] snapshot_id=2, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+[DEBUG GetSchemaForSnapshot] snapshot_id=2, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+[DEBUG GetSchemaForSnapshot] snapshot_id=2, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+[DEBUG GetSchemaForSnapshot] snapshot_id=2, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+[DEBUG GetSchemaForSnapshot] snapshot_id=2, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+[DEBUG GetSchemaForSnapshot] snapshot_id=2, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+┌───────┬─────────┐
+│  id   │  name   │
+│ int32 │ varchar │
+├───────┼─────────┤
+│     1 │ Alice   │
+│     2 │ Bob     │
+│     3 │ Charlie │
+└───────┴─────────┘
+[DEBUG LookupSchema] schema_name=main, has_at_clause=no
+[DEBUG LookupSchema] Using snapshot_id=2, schema_version=1
+[DEBUG GetSchemaForSnapshot] snapshot_id=2, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+[DEBUG LookupSchema] Got schemas catalog set with 1 schema entries
+[DEBUG LookupSchema]   - schema: 'main'
+[DEBUG LookupSchema] Found schema 'main'
+[DEBUG LookupEntry] schema=main, entry_name=ducklake_use_branch, catalog_type=Table Function, has_at_clause=no
+[DEBUG LookupEntry] actual_name=ducklake_use_branch, branch_ref.HasBranch=no
+[DEBUG LookupEntry] Searching in catalog_set with 0 entries
+[DEBUG LookupEntry] Entry 'ducklake_use_branch' NOT FOUND in catalog_set
+[DEBUG LookupEntry] Available entries in catalog_set:
+[DEBUG LookupSchema] schema_name=main, has_at_clause=no
+[DEBUG LookupSchema] Using snapshot_id=2, schema_version=1
+[DEBUG GetSchemaForSnapshot] snapshot_id=2, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+[DEBUG LookupSchema] Got schemas catalog set with 1 schema entries
+[DEBUG LookupSchema]   - schema: 'main'
+[DEBUG LookupSchema] Found schema 'main'
+[DEBUG LookupEntry] schema=main, entry_name=ducklake_use_branch, catalog_type=Table Function, has_at_clause=no
+[DEBUG LookupEntry] actual_name=ducklake_use_branch, branch_ref.HasBranch=no
+[DEBUG LookupEntry] Searching in catalog_set with 0 entries
+[DEBUG LookupEntry] Entry 'ducklake_use_branch' NOT FOUND in catalog_set
+[DEBUG LookupEntry] Available entries in catalog_set:
+┌───────────┬─────────────┬───────────┬──────────────────┐
+│  catalog  │ branch_name │ branch_id │ head_snapshot_id │
+│  varchar  │   varchar   │   int64   │      int64       │
+├───────────┼─────────────┼───────────┼──────────────────┤
+│ test_lake │ dev_branch  │         1 │                3 │
+└───────────┴─────────────┴───────────┴──────────────────┘
+┌──────────────────┐
+│       info       │
+│     varchar      │
+├──────────────────┤
+│ Dev branch data: │
+└──────────────────┘
+[DEBUG LookupSchema] schema_name=main, has_at_clause=no
+[DEBUG LookupSchema] Using snapshot_id=3, schema_version=1
+[DEBUG GetSchemaForSnapshot] snapshot_id=3, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+[DEBUG LookupSchema] Got schemas catalog set with 1 schema entries
+[DEBUG LookupSchema]   - schema: 'main'
+[DEBUG LookupSchema] Found schema 'main'
+[DEBUG LookupEntry] schema=main, entry_name=employees, catalog_type=Table, has_at_clause=no
+[DEBUG LookupEntry] actual_name=employees, branch_ref.HasBranch=no
+[DEBUG LookupEntry] Searching in catalog_set with 1 entries
+[DEBUG LookupEntry] Found entry 'employees'
+[DEBUG GetSchemaForSnapshot] snapshot_id=3, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+[DEBUG GetSchemaForSnapshot] snapshot_id=3, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+[DEBUG GetSchemaForSnapshot] snapshot_id=3, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+[DEBUG GetSchemaForSnapshot] snapshot_id=3, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+[DEBUG GetSchemaForSnapshot] snapshot_id=3, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+[DEBUG GetSchemaForSnapshot] snapshot_id=3, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+┌───────┬─────────┐
+│  id   │  name   │
+│ int32 │ varchar │
+├───────┼─────────┤
+│     1 │ Alice   │
+│     2 │ Bob     │
+│     3 │ Charlie │
+│     4 │ Diana   │
+│     5 │ Eve     │
+└───────┴─────────┘
+┌─────────────────────────┐
+│          info           │
+│         varchar         │
+├─────────────────────────┤
+│ Data files in metadata: │
+└─────────────────────────┘
+[DEBUG LookupSchema] schema_name=test_lake, has_at_clause=no
+[DEBUG LookupSchema] Using snapshot_id=3, schema_version=1
+[DEBUG GetSchemaForSnapshot] snapshot_id=3, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+[DEBUG LookupSchema] Got schemas catalog set with 1 schema entries
+[DEBUG LookupSchema]   - schema: 'main'
+[DEBUG LookupSchema] Schema 'test_lake' NOT FOUND
+[DEBUG LookupSchema] schema_name=main, has_at_clause=no
+[DEBUG LookupSchema] Using snapshot_id=3, schema_version=1
+[DEBUG GetSchemaForSnapshot] snapshot_id=3, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+[DEBUG LookupSchema] Got schemas catalog set with 1 schema entries
+[DEBUG LookupSchema]   - schema: 'main'
+[DEBUG LookupSchema] Found schema 'main'
+[DEBUG LookupEntry] schema=main, entry_name=ducklake_data_file, catalog_type=Table, has_at_clause=no
+[DEBUG LookupEntry] actual_name=ducklake_data_file, branch_ref.HasBranch=no
+[DEBUG LookupEntry] Searching in catalog_set with 1 entries
+[DEBUG LookupEntry] Entry 'ducklake_data_file' NOT FOUND in catalog_set
+[DEBUG LookupEntry] Available entries in catalog_set:
+[DEBUG LookupEntry]   - 'employees'
+[DEBUG LookupSchema] schema_name=main, has_at_clause=no
+[DEBUG LookupSchema] Using snapshot_id=3, schema_version=1
+[DEBUG GetSchemaForSnapshot] snapshot_id=3, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+[DEBUG LookupSchema] Got schemas catalog set with 1 schema entries
+[DEBUG LookupSchema]   - schema: 'main'
+[DEBUG LookupSchema] Found schema 'main'
+[DEBUG LookupEntry] schema=main, entry_name=ducklake_data_file, catalog_type=Table, has_at_clause=no
+[DEBUG LookupEntry] actual_name=ducklake_data_file, branch_ref.HasBranch=no
+[DEBUG LookupEntry] Searching in catalog_set with 1 entries
+[DEBUG LookupEntry] Entry 'ducklake_data_file' NOT FOUND in catalog_set
+[DEBUG LookupEntry] Available entries in catalog_set:
+[DEBUG LookupEntry]   - 'employees'
+[DEBUG GetSchemaForSnapshot] snapshot_id=3, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+Catalog Error: Table with name ducklake_data_file does not exist!
+Did you mean "__ducklake_metadata_test_lake.ducklake_data_file"?
+
+LINE 2: FROM test_lake.ducklake_data_file 
+             ^
+┌─────────────────┐
+│      info       │
+│     varchar     │
+├─────────────────┤
+│ Branch lineage: │
+└─────────────────┘
+[DEBUG LookupSchema] schema_name=test_lake, has_at_clause=no
+[DEBUG LookupSchema] Using snapshot_id=3, schema_version=1
+[DEBUG GetSchemaForSnapshot] snapshot_id=3, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+[DEBUG LookupSchema] Got schemas catalog set with 1 schema entries
+[DEBUG LookupSchema]   - schema: 'main'
+[DEBUG LookupSchema] Schema 'test_lake' NOT FOUND
+[DEBUG LookupSchema] schema_name=main, has_at_clause=no
+[DEBUG LookupSchema] Using snapshot_id=3, schema_version=1
+[DEBUG GetSchemaForSnapshot] snapshot_id=3, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+[DEBUG LookupSchema] Got schemas catalog set with 1 schema entries
+[DEBUG LookupSchema]   - schema: 'main'
+[DEBUG LookupSchema] Found schema 'main'
+[DEBUG LookupEntry] schema=main, entry_name=ducklake_branch_lineage, catalog_type=Table, has_at_clause=no
+[DEBUG LookupEntry] actual_name=ducklake_branch_lineage, branch_ref.HasBranch=no
+[DEBUG LookupEntry] Searching in catalog_set with 1 entries
+[DEBUG LookupEntry] Entry 'ducklake_branch_lineage' NOT FOUND in catalog_set
+[DEBUG LookupEntry] Available entries in catalog_set:
+[DEBUG LookupEntry]   - 'employees'
+[DEBUG LookupSchema] schema_name=main, has_at_clause=no
+[DEBUG LookupSchema] Using snapshot_id=3, schema_version=1
+[DEBUG GetSchemaForSnapshot] snapshot_id=3, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+[DEBUG LookupSchema] Got schemas catalog set with 1 schema entries
+[DEBUG LookupSchema]   - schema: 'main'
+[DEBUG LookupSchema] Found schema 'main'
+[DEBUG LookupEntry] schema=main, entry_name=ducklake_branch_lineage, catalog_type=Table, has_at_clause=no
+[DEBUG LookupEntry] actual_name=ducklake_branch_lineage, branch_ref.HasBranch=no
+[DEBUG LookupEntry] Searching in catalog_set with 1 entries
+[DEBUG LookupEntry] Entry 'ducklake_branch_lineage' NOT FOUND in catalog_set
+[DEBUG LookupEntry] Available entries in catalog_set:
+[DEBUG LookupEntry]   - 'employees'
+[DEBUG GetSchemaForSnapshot] snapshot_id=3, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+Catalog Error: Table with name ducklake_branch_lineage does not exist!
+Did you mean "__ducklake_metadata_test_lake.ducklake_branch_lineage"?
+
+LINE 1: SELECT * FROM test_lake.ducklake_branch_lineage ORDER BY branch_id, ances...
+                      ^
+┌───────────┐
+│   info    │
+│  varchar  │
+├───────────┤
+│ Branches: │
+└───────────┘
+[DEBUG LookupSchema] schema_name=test_lake, has_at_clause=no
+[DEBUG LookupSchema] Using snapshot_id=3, schema_version=1
+[DEBUG GetSchemaForSnapshot] snapshot_id=3, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+[DEBUG LookupSchema] Got schemas catalog set with 1 schema entries
+[DEBUG LookupSchema]   - schema: 'main'
+[DEBUG LookupSchema] Schema 'test_lake' NOT FOUND
+[DEBUG LookupSchema] schema_name=main, has_at_clause=no
+[DEBUG LookupSchema] Using snapshot_id=3, schema_version=1
+[DEBUG GetSchemaForSnapshot] snapshot_id=3, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+[DEBUG LookupSchema] Got schemas catalog set with 1 schema entries
+[DEBUG LookupSchema]   - schema: 'main'
+[DEBUG LookupSchema] Found schema 'main'
+[DEBUG LookupEntry] schema=main, entry_name=ducklake_branch, catalog_type=Table, has_at_clause=no
+[DEBUG LookupEntry] actual_name=ducklake_branch, branch_ref.HasBranch=no
+[DEBUG LookupEntry] Searching in catalog_set with 1 entries
+[DEBUG LookupEntry] Entry 'ducklake_branch' NOT FOUND in catalog_set
+[DEBUG LookupEntry] Available entries in catalog_set:
+[DEBUG LookupEntry]   - 'employees'
+[DEBUG LookupSchema] schema_name=main, has_at_clause=no
+[DEBUG LookupSchema] Using snapshot_id=3, schema_version=1
+[DEBUG GetSchemaForSnapshot] snapshot_id=3, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+[DEBUG LookupSchema] Got schemas catalog set with 1 schema entries
+[DEBUG LookupSchema]   - schema: 'main'
+[DEBUG LookupSchema] Found schema 'main'
+[DEBUG LookupEntry] schema=main, entry_name=ducklake_branch, catalog_type=Table, has_at_clause=no
+[DEBUG LookupEntry] actual_name=ducklake_branch, branch_ref.HasBranch=no
+[DEBUG LookupEntry] Searching in catalog_set with 1 entries
+[DEBUG LookupEntry] Entry 'ducklake_branch' NOT FOUND in catalog_set
+[DEBUG LookupEntry] Available entries in catalog_set:
+[DEBUG LookupEntry]   - 'employees'
+[DEBUG GetSchemaForSnapshot] snapshot_id=3, schema_version=1
+[DEBUG GetSchemaForSnapshot] Found cached schema for version 1 with 1 entries
+Catalog Error: Table with name ducklake_branch does not exist!
+Did you mean "__ducklake_metadata_test_lake.ducklake_branch"?
+
+LINE 1: SELECT * FROM test_lake.ducklake_branch ORDER BY branch_id;
+                      ^

@@ -15,6 +15,8 @@ namespace duckdb {
 
 struct DuckLakeConstants {
 	static constexpr const idx_t TRANSACTION_LOCAL_ID_START = 9223372036854775808ULL;
+	static constexpr const idx_t MAIN_BRANCH_ID = 0;
+	static constexpr const idx_t MAX_VISIBLE_SNAPSHOT = 9223372036854775807ULL;
 };
 
 struct SchemaIndex {
@@ -158,6 +160,31 @@ struct MappingIndex {
 	};
 	bool IsValid() const {
 		return index != DConstants::INVALID_INDEX;
+	}
+};
+
+struct BranchIndex {
+	BranchIndex() : index(DuckLakeConstants::MAIN_BRANCH_ID) {
+	}
+	explicit BranchIndex(idx_t index) : index(index) {
+	}
+
+	idx_t index;
+
+	inline bool operator==(const BranchIndex &rhs) const {
+		return index == rhs.index;
+	};
+	inline bool operator!=(const BranchIndex &rhs) const {
+		return index != rhs.index;
+	};
+	inline bool operator<(const BranchIndex &rhs) const {
+		return index < rhs.index;
+	};
+	bool IsValid() const {
+		return true; // Branch 0 (main) is always valid
+	}
+	bool IsMain() const {
+		return index == DuckLakeConstants::MAIN_BRANCH_ID;
 	}
 };
 

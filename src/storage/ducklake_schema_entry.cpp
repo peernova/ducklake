@@ -1,4 +1,5 @@
 #include "storage/ducklake_schema_entry.hpp"
+#include "common/ducklake_branch_ref.hpp"
 #include "duckdb/common/types/uuid.hpp"
 #include "duckdb/parser/parsed_data/comment_on_column_info.hpp"
 #include "duckdb/parser/parsed_data/create_view_info.hpp"
@@ -328,8 +329,27 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::LookupEntry(CatalogTransaction t
                                                             const EntryLookupInfo &lookup_info) {
 	auto catalog_type = lookup_info.GetCatalogType();
 	auto &entry_name = lookup_info.GetEntryName();
+	auto at_clause = lookup_info.GetAtClause();
+
+	// DEBUG: Log LookupEntry
+	fprintf(stderr, "[DEBUG LookupEntry] schema=%s, entry_name=%s, catalog_type=%s, has_at_clause=%s\n", name.c_str(),
+	        entry_name.c_str(), CatalogTypeToString(catalog_type).c_str(), at_clause ? "yes" : "no");
+	if (at_clause) {
+		fprintf(stderr, "[DEBUG LookupEntry] AT clause: unit=%s, value=%s\n", at_clause->Unit().c_str(),
+		        at_clause->GetValue().ToString().c_str());
+	}
+	fflush(stderr);
+
+	// Parse @ syntax for branch references (e.g., table@branch or table@branch:version)
+	auto branch_ref = DuckLakeBranchRef::Parse(entry_name);
+	const string &actual_name = branch_ref.table_name;
+
+	fprintf(stderr, "[DEBUG LookupEntry] actual_name=%s, branch_ref.HasBranch=%s\n", actual_name.c_str(),
+	        branch_ref.HasBranch() ? "yes" : "no");
+	fflush(stderr);
+
 	if (catalog_type == CatalogType::TABLE_FUNCTION_ENTRY) {
-		auto entry = TryLoadBuiltInFunction(entry_name);
+		auto entry = TryLoadBuiltInFunction(actual_name);
 		if (entry) {
 			return entry;
 		}
@@ -338,17 +358,41 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::LookupEntry(CatalogTransaction t
 		return nullptr;
 	}
 	auto &duck_transaction = transaction.transaction->Cast<DuckLakeTransaction>();
+
+	// Store branch context in transaction if specified
+	if (branch_ref.HasBranch() || branch_ref.HasVersion()) {
+		duck_transaction.SetBranchContext(branch_ref);
+	}
+
 	//! search in transaction local storage first
-	auto transaction_entry = duck_transaction.GetTransactionLocalEntry(catalog_type, name, entry_name);
+	auto transaction_entry = duck_transaction.GetTransactionLocalEntry(catalog_type, name, actual_name);
 	if (transaction_entry) {
+		fprintf(stderr, "[DEBUG LookupEntry] Found in transaction local storage\n");
+		fflush(stderr);
 		return transaction_entry;
 	}
 	auto &catalog_set = GetCatalogSet(catalog_type);
-	auto entry = catalog_set.GetEntry(entry_name);
+
+	fprintf(stderr, "[DEBUG LookupEntry] Searching in catalog_set with %zu entries\n", catalog_set.GetEntries().size());
+	fflush(stderr);
+
+	auto entry = catalog_set.GetEntry(actual_name);
 	if (!entry) {
+		fprintf(stderr, "[DEBUG LookupEntry] Entry '%s' NOT FOUND in catalog_set\n", actual_name.c_str());
+		// DEBUG: List all entries
+		fprintf(stderr, "[DEBUG LookupEntry] Available entries in catalog_set:\n");
+		for (auto &e : catalog_set.GetEntries()) {
+			fprintf(stderr, "[DEBUG LookupEntry]   - '%s'\n", e.first.c_str());
+		}
+		fflush(stderr);
 		return nullptr;
 	}
+	fprintf(stderr, "[DEBUG LookupEntry] Found entry '%s'\n", actual_name.c_str());
+	fflush(stderr);
+
 	if (duck_transaction.IsDeleted(*entry) || duck_transaction.IsRenamed(*entry)) {
+		fprintf(stderr, "[DEBUG LookupEntry] Entry is deleted or renamed\n");
+		fflush(stderr);
 		return nullptr;
 	}
 	return *entry;

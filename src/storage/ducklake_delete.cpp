@@ -223,6 +223,7 @@ void DuckLakeDelete::FlushDelete(DuckLakeTransaction &transaction, ClientContext
 	DuckLakeDeleteFile delete_file;
 	delete_file.data_file_path = filename;
 	delete_file.data_file_id = data_file_info.file_id;
+	delete_file.data_file_branch_id = data_file_info.branch_id;  // Set the branch that owns the data file
 	// check if the file already has deletes
 	auto existing_delete_data = delete_map->GetDeleteData(filename);
 	if (existing_delete_data) {

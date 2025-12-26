@@ -119,4 +119,38 @@ public:
 	static TableFunctionSet GetFunctions();
 };
 
+//===--------------------------------------------------------------------===//
+// Branch Functions
+//===--------------------------------------------------------------------===//
+
+class DuckLakeListBranchesFunction {
+public:
+	static TableFunction GetFunction();
+};
+
+class DuckLakeCreateBranchFunction {
+public:
+	static TableFunctionSet GetFunctions();
+};
+
+class DuckLakeDeleteBranchFunction {
+public:
+	static TableFunction GetFunction();
+};
+
+class DuckLakeBranchLineageFunction {
+public:
+	static TableFunction GetFunction();
+};
+
+class DuckLakeUseBranchFunction {
+public:
+	static TableFunction GetFunction();
+};
+
+class DuckLakeCurrentBranchFunction {
+public:
+	static TableFunction GetFunction();
+};
+
 } // namespace duckdb

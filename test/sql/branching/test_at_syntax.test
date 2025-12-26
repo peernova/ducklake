@@ -1,0 +1,154 @@
+# name: test/sql/branching/test_at_syntax.test
+# description: Test AT clause syntax for branch and version references
+# group: [branching]
+# NOTE: AT clause only works for SELECT, not for INSERT/UPDATE/DELETE
+
+require ducklake
+
+# Create test catalog
+statement ok
+ATTACH 'ducklake:metadata=sqlite:__TEST_DIR__/at_syntax_test.db data=__TEST_DIR__/at_syntax_data' AS test_catalog;
+
+statement ok
+USE test_catalog;
+
+# ============================================================================
+# SETUP: Create table and branches at different data points
+# ============================================================================
+
+statement ok
+CREATE TABLE products (id BIGINT, name VARCHAR, price DECIMAL(10,2));
+
+statement ok
+INSERT INTO products VALUES (1, 'Widget', 9.99), (2, 'Gadget', 19.99), (3, 'Gizmo', 29.99);
+
+# Create dev branch (snapshot at 3 products)
+statement ok
+SELECT * FROM ducklake_create_branch('test_catalog', 'dev');
+
+# Add more products to main
+statement ok
+INSERT INTO products VALUES (4, 'Doohickey', 39.99);
+
+# Create staging branch from dev
+statement ok
+SELECT * FROM ducklake_create_branch('test_catalog', 'staging', 'dev');
+
+# ============================================================================
+# TEST: AT (BRANCH => 'name') syntax for SELECT
+# ============================================================================
+
+# Query main branch explicitly
+query I
+SELECT COUNT(*) FROM products AT (BRANCH => 'main');
+----
+4
+
+# Query dev branch
+query I
+SELECT COUNT(*) FROM products AT (BRANCH => 'dev');
+----
+3
+
+# Query staging branch (forked from dev, sees same as dev)
+query I
+SELECT COUNT(*) FROM products AT (BRANCH => 'staging');
+----
+3
+
+# ============================================================================
+# TEST: Data differences between branches
+# ============================================================================
+
+# Doohickey only on main
+query I
+SELECT COUNT(*) FROM products AT (BRANCH => 'main') WHERE name = 'Doohickey';
+----
+1
+
+query I
+SELECT COUNT(*) FROM products AT (BRANCH => 'dev') WHERE name = 'Doohickey';
+----
+0
+
+query I
+SELECT COUNT(*) FROM products AT (BRANCH => 'staging') WHERE name = 'Doohickey';
+----
+0
+
+# ============================================================================
+# TEST: AT (VERSION => n) syntax
+# ============================================================================
+
+# Query at specific version (main branch implied)
+query I
+SELECT COUNT(*) FROM products AT (VERSION => 1);
+----
+0
+
+query I
+SELECT COUNT(*) FROM products AT (VERSION => 2);
+----
+3
+
+# ============================================================================
+# TEST: AT clause in JOINs
+# ============================================================================
+
+statement ok
+CREATE TABLE orders (id BIGINT, product_id BIGINT, quantity INT);
+
+statement ok
+INSERT INTO orders VALUES (1, 1, 5), (2, 2, 3);
+
+# Create branch before more orders
+statement ok
+SELECT * FROM ducklake_create_branch('test_catalog', 'orders_snapshot');
+
+# Add order for Doohickey
+statement ok
+INSERT INTO orders VALUES (3, 4, 10);
+
+# Join main orders with main products
+query III
+SELECT o.id, p.name, o.quantity 
+FROM orders AT (BRANCH => 'main') o 
+JOIN products AT (BRANCH => 'main') p ON o.product_id = p.id 
+ORDER BY o.id;
+----
+1	Widget	5
+2	Gadget	3
+3	Doohickey	10
+
+# Join snapshot orders with dev products (Doohickey order not in snapshot)
+query III
+SELECT o.id, p.name, o.quantity 
+FROM orders AT (BRANCH => 'orders_snapshot') o 
+JOIN products AT (BRANCH => 'dev') p ON o.product_id = p.id 
+ORDER BY o.id;
+----
+1	Widget	5
+2	Gadget	3
+
+# ============================================================================
+# TEST: Error cases
+# ============================================================================
+
+# Non-existent branch
+statement error
+SELECT * FROM products AT (BRANCH => 'nonexistent');
+----
+Branch not found
+
+# ============================================================================
+# CLEANUP
+# ============================================================================
+
+statement ok
+DROP TABLE orders;
+
+statement ok
+DROP TABLE products;
+
+statement ok
+DETACH test_catalog;

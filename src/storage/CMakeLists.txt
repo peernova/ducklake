@@ -1,5 +1,6 @@
 add_library(
   ducklake_storage OBJECT
+  ducklake_branch_manager.cpp
   ducklake_catalog.cpp
   ducklake_checkpoint.cpp
   ducklake_default_functions.cpp

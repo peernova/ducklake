@@ -15,6 +15,7 @@
 #include "duckdb/common/reference_map.hpp"
 #include "duckdb/common/types/value.hpp"
 #include "common/ducklake_snapshot.hpp"
+#include "common/ducklake_branch.hpp"
 #include "storage/ducklake_partition_data.hpp"
 #include "storage/ducklake_stats.hpp"
 #include "duckdb/common/types/timestamp.hpp"
@@ -29,6 +30,7 @@ class DuckLakeCatalogSet;
 class DuckLakeSchemaEntry;
 class DuckLakeTableEntry;
 class DuckLakeTransaction;
+class DuckLakeBranchManager;
 class BoundAtClause;
 class QueryResult;
 class FileSystem;
@@ -246,11 +248,18 @@ private:
 	virtual string GenerateFilterPushdown(const TableFilter &filter, unordered_set<string> &referenced_stats);
 
 private:
+public:
+	//! Get the branch manager for this metadata manager
+	DuckLakeBranchManager &GetBranchManager();
+
 protected:
 	DuckLakeTransaction &transaction;
 	mutex paths_lock;
 	map<SchemaIndex, string> schema_paths;
 	map<TableIndex, string> table_paths;
+
+	//! The branch manager for handling branch operations
+	unique_ptr<DuckLakeBranchManager> branch_manager;
 };
 
 } // namespace duckdb

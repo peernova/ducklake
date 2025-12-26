@@ -176,17 +176,44 @@ idx_t DuckLakeCatalog::GetSnapshotForSchema(idx_t schema_id, DuckLakeTransaction
 	return metadata_manager.GetCatalogIdForSchema(schema_id);
 }
 
+// Helper function to create a composite cache key from branch_id and schema_version
+static idx_t MakeSchemaCacheKey(BranchIndex branch_id, idx_t schema_version) {
+	// Use a simple hash combination: branch_id * large_prime + schema_version
+	// This ensures uniqueness for typical branch_id and schema_version ranges
+	return (branch_id.index * 1000000007ULL) + schema_version;
+}
+
 DuckLakeCatalogSet &DuckLakeCatalog::GetSchemaForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot) {
+	fprintf(stderr, "[DEBUG GetSchemaForSnapshot] snapshot_id=%llu, schema_version=%llu, branch_id=%llu\n",
+	        static_cast<unsigned long long>(snapshot.snapshot_id),
+	        static_cast<unsigned long long>(snapshot.schema_version),
+	        static_cast<unsigned long long>(snapshot.branch_id.index));
+	fflush(stderr);
+
 	lock_guard<mutex> guard(schemas_lock);
-	auto entry = schemas.find(snapshot.schema_version);
+	// Use composite key of (branch_id, schema_version) to properly separate schemas across branches
+	auto cache_key = MakeSchemaCacheKey(snapshot.branch_id, snapshot.schema_version);
+	auto entry = schemas.find(cache_key);
 	if (entry != schemas.end()) {
-		// this schema version is already cached
+		// this schema version for this branch is already cached
+		fprintf(stderr, "[DEBUG GetSchemaForSnapshot] Found cached schema for branch %llu, version %llu with %zu entries\n",
+		        static_cast<unsigned long long>(snapshot.branch_id.index),
+		        static_cast<unsigned long long>(snapshot.schema_version), entry->second->GetEntries().size());
+		fflush(stderr);
 		return *entry->second;
 	}
 	// load the schema version from the metadata manager
+	fprintf(stderr, "[DEBUG GetSchemaForSnapshot] Loading schema for branch %llu, version %llu from metadata manager\n",
+	        static_cast<unsigned long long>(snapshot.branch_id.index),
+	        static_cast<unsigned long long>(snapshot.schema_version));
+	fflush(stderr);
+
 	auto schema = LoadSchemaForSnapshot(transaction, snapshot);
+	fprintf(stderr, "[DEBUG GetSchemaForSnapshot] Loaded schema with %zu entries\n", schema->GetEntries().size());
+	fflush(stderr);
+
 	auto &result = *schema;
-	schemas.insert(make_pair(snapshot.schema_version, std::move(schema)));
+	schemas.insert(make_pair(cache_key, std::move(schema)));
 	return result;
 }
 
@@ -618,6 +645,11 @@ optional_ptr<SchemaCatalogEntry> DuckLakeCatalog::LookupSchema(CatalogTransactio
                                                                const EntryLookupInfo &schema_lookup,
                                                                OnEntryNotFound if_not_found) {
 	auto &schema_name = schema_lookup.GetEntryName();
+
+	fprintf(stderr, "[DEBUG LookupSchema] schema_name=%s, has_at_clause=%s\n", schema_name.c_str(),
+	        schema_lookup.GetAtClause() ? "yes" : "no");
+	fflush(stderr);
+
 	if (!initialized) {
 		if (if_not_found == OnEntryNotFound::THROW_EXCEPTION) {
 			throw BinderException("Failed to look-up \"%s\" - DuckLake %s is not yet initialized", schema_name,
@@ -634,19 +666,39 @@ optional_ptr<SchemaCatalogEntry> DuckLakeCatalog::LookupSchema(CatalogTransactio
 		if (set) {
 			auto entry = set->GetEntry<SchemaCatalogEntry>(schema_name);
 			if (entry) {
+				fprintf(stderr, "[DEBUG LookupSchema] Found in transaction-local schemas\n");
+				fflush(stderr);
 				return entry;
 			}
 		}
 	}
 	auto snapshot = duck_transaction.GetSnapshot(at_clause);
+	fprintf(stderr, "[DEBUG LookupSchema] Using snapshot_id=%llu, schema_version=%llu\n",
+	        static_cast<unsigned long long>(snapshot.snapshot_id),
+	        static_cast<unsigned long long>(snapshot.schema_version));
+	fflush(stderr);
+
 	auto &schemas = GetSchemaForSnapshot(duck_transaction, snapshot);
+
+	fprintf(stderr, "[DEBUG LookupSchema] Got schemas catalog set with %zu schema entries\n",
+	        schemas.GetEntries().size());
+	for (auto &e : schemas.GetEntries()) {
+		fprintf(stderr, "[DEBUG LookupSchema]   - schema: '%s'\n", e.first.c_str());
+	}
+	fflush(stderr);
+
 	auto entry = schemas.GetEntry<SchemaCatalogEntry>(schema_name);
 	if (!entry) {
+		fprintf(stderr, "[DEBUG LookupSchema] Schema '%s' NOT FOUND\n", schema_name.c_str());
+		fflush(stderr);
 		if (if_not_found == OnEntryNotFound::THROW_EXCEPTION) {
 			throw BinderException("Schema \"%s\" not found in DuckLakeCatalog \"%s\"", schema_name, GetName());
 		}
 		return nullptr;
 	}
+	fprintf(stderr, "[DEBUG LookupSchema] Found schema '%s'\n", schema_name.c_str());
+	fflush(stderr);
+
 	if (!at_clause && duck_transaction.IsDeleted(*entry)) {
 		return nullptr;
 	}

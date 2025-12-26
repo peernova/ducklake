@@ -1,0 +1,218 @@
+# name: test/sql/branching/test_cross_branch_queries.test
+# description: Test queries that reference multiple branches
+# group: [branching]
+# NOTE: Branches are read-only snapshots. This tests cross-branch SELECT queries.
+
+require ducklake
+
+# Create test catalog
+statement ok
+ATTACH 'ducklake:metadata=sqlite:__TEST_DIR__/cross_branch_test.db data=__TEST_DIR__/cross_branch_data' AS cross_catalog;
+
+statement ok
+USE cross_catalog;
+
+# ============================================================================
+# SETUP: Create tables with data at different points, creating branches
+# ============================================================================
+
+statement ok
+CREATE TABLE customers (
+    id BIGINT,
+    name VARCHAR,
+    tier VARCHAR
+);
+
+statement ok
+CREATE TABLE orders (
+    id BIGINT,
+    customer_id BIGINT,
+    amount DECIMAL(10,2),
+    status VARCHAR
+);
+
+# Initial data
+statement ok
+INSERT INTO customers VALUES 
+    (1, 'Alice', 'gold'),
+    (2, 'Bob', 'silver'),
+    (3, 'Charlie', 'bronze');
+
+statement ok
+INSERT INTO orders VALUES 
+    (100, 1, 500.00, 'completed'),
+    (101, 2, 250.00, 'completed'),
+    (102, 3, 100.00, 'pending');
+
+# Create snapshot after initial data
+statement ok
+SELECT * FROM ducklake_create_branch('cross_catalog', 'initial_snapshot');
+
+# Add more data to main
+statement ok
+INSERT INTO customers VALUES (4, 'Dave', 'gold');
+
+statement ok
+INSERT INTO orders VALUES (103, 4, 1000.00, 'completed');
+
+# Update on main
+statement ok
+UPDATE customers SET tier = 'platinum' WHERE id = 1;
+
+# Create snapshot after updates
+statement ok
+SELECT * FROM ducklake_create_branch('cross_catalog', 'updated_snapshot');
+
+# ============================================================================
+# TEST 1: Compare data between branches with UNION
+# ============================================================================
+
+# Get all unique customers across both branches
+query IT
+SELECT DISTINCT id, name FROM (
+    SELECT id, name FROM customers AT (BRANCH => 'main')
+    UNION
+    SELECT id, name FROM customers AT (BRANCH => 'initial_snapshot')
+) ORDER BY id;
+----
+1	Alice
+2	Bob
+3	Charlie
+4	Dave
+
+# ============================================================================
+# TEST 2: Find differences between branches with EXCEPT
+# ============================================================================
+
+# Customers in main but not in initial_snapshot
+query IT
+SELECT id, name FROM customers AT (BRANCH => 'main')
+EXCEPT
+SELECT id, name FROM customers AT (BRANCH => 'initial_snapshot')
+ORDER BY id;
+----
+4	Dave
+
+# ============================================================================
+# TEST 3: Cross-branch JOINs
+# ============================================================================
+
+# Join main orders with initial_snapshot customers
+# Customer 4 (Dave) won't have a match in initial_snapshot
+query ITR
+SELECT o.id, c.name, o.amount
+FROM orders AT (BRANCH => 'main') o
+LEFT JOIN customers AT (BRANCH => 'initial_snapshot') c ON o.customer_id = c.id
+ORDER BY o.id;
+----
+100	Alice	500.00
+101	Bob	250.00
+102	Charlie	100.00
+103	NULL	1000.00
+
+# Join initial_snapshot customers with main orders
+query ITR
+SELECT c.name, COALESCE(SUM(o.amount), 0) as total_orders
+FROM customers AT (BRANCH => 'initial_snapshot') c
+LEFT JOIN orders AT (BRANCH => 'main') o ON o.customer_id = c.id
+GROUP BY c.name
+ORDER BY c.name;
+----
+Alice	500.00
+Bob	250.00
+Charlie	100.00
+
+# ============================================================================
+# TEST 4: Aggregate comparisons between branches
+# ============================================================================
+
+# Compare total order amounts
+query RR
+SELECT 
+    (SELECT SUM(amount) FROM orders AT (BRANCH => 'main')) as main_total,
+    (SELECT SUM(amount) FROM orders AT (BRANCH => 'initial_snapshot')) as snapshot_total;
+----
+1850.00	850.00
+
+# Compare customer counts
+query II
+SELECT 
+    (SELECT COUNT(*) FROM customers AT (BRANCH => 'main')) as main_count,
+    (SELECT COUNT(*) FROM customers AT (BRANCH => 'initial_snapshot')) as snapshot_count;
+----
+4	3
+
+# ============================================================================
+# TEST 5: Tier comparison between branches
+# ============================================================================
+
+# Alice was upgraded to platinum in main, still gold in snapshots
+query TTT
+SELECT 
+    (SELECT tier FROM customers AT (BRANCH => 'main') WHERE id = 1) as main_tier,
+    (SELECT tier FROM customers AT (BRANCH => 'initial_snapshot') WHERE id = 1) as initial_tier,
+    (SELECT tier FROM customers AT (BRANCH => 'updated_snapshot') WHERE id = 1) as updated_tier;
+----
+platinum	gold	platinum
+
+# ============================================================================
+# TEST 6: Subqueries referencing different branches
+# ============================================================================
+
+# Find customers who have orders in main but not in initial_snapshot
+query IT
+SELECT c.id, c.name
+FROM customers AT (BRANCH => 'main') c
+WHERE (SELECT COUNT(*) FROM orders AT (BRANCH => 'main') o WHERE o.customer_id = c.id) 
+    > (SELECT COUNT(*) FROM orders AT (BRANCH => 'initial_snapshot') o WHERE o.customer_id = c.id)
+ORDER BY c.id;
+----
+4	Dave
+
+# ============================================================================
+# TEST 7: Compare all three branches
+# ============================================================================
+
+query IIII
+SELECT 
+    (SELECT COUNT(*) FROM orders AT (BRANCH => 'main')) as main_orders,
+    (SELECT COUNT(*) FROM orders AT (BRANCH => 'initial_snapshot')) as initial_orders,
+    (SELECT COUNT(*) FROM orders AT (BRANCH => 'updated_snapshot')) as updated_orders,
+    (SELECT COUNT(*) FROM orders) as default_orders;
+----
+4	3	4	4
+
+# ============================================================================
+# TEST 8: Window functions with branch data
+# ============================================================================
+
+# Rank customers by total orders on main
+query ITR
+SELECT c.name, 
+       COALESCE(total, 0) as total_orders,
+       RANK() OVER (ORDER BY COALESCE(total, 0) DESC) as rank
+FROM customers AT (BRANCH => 'main') c
+LEFT JOIN (
+    SELECT customer_id, SUM(amount) as total 
+    FROM orders AT (BRANCH => 'main') 
+    GROUP BY customer_id
+) o ON c.id = o.customer_id
+ORDER BY rank, c.name;
+----
+Dave	1000.00	1
+Alice	500.00	2
+Bob	250.00	3
+Charlie	100.00	4
+
+# ============================================================================
+# CLEANUP
+# ============================================================================
+
+statement ok
+DROP TABLE orders;
+
+statement ok
+DROP TABLE customers;
+
+statement ok
+DETACH cross_catalog;

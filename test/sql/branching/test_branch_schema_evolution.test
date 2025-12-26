@@ -1,0 +1,155 @@
+# name: test/sql/branching/test_branch_schema_evolution.test
+# description: Test schema changes and how branches see them
+# group: [branching]
+# NOTE: Branches are read-only snapshots. Schema changes on main don't affect existing branches.
+
+require ducklake
+
+# Create test catalog
+statement ok
+ATTACH 'ducklake:metadata=sqlite:__TEST_DIR__/schema_evo_test.db data=__TEST_DIR__/schema_evo_data' AS schema_catalog;
+
+statement ok
+USE schema_catalog;
+
+# ============================================================================
+# SETUP: Create table with initial schema
+# ============================================================================
+
+statement ok
+CREATE TABLE users (
+    id BIGINT,
+    name VARCHAR
+);
+
+statement ok
+INSERT INTO users VALUES (1, 'Alice'), (2, 'Bob');
+
+# Create branch before schema change
+statement ok
+SELECT * FROM ducklake_create_branch('schema_catalog', 'before_email');
+
+# ============================================================================
+# TEST 1: ADD COLUMN on main after branching
+# ============================================================================
+
+statement ok
+ALTER TABLE users ADD COLUMN email VARCHAR;
+
+statement ok
+UPDATE users SET email = name || '@example.com';
+
+# Main has the new column
+query ITT
+SELECT id, name, email FROM users AT (BRANCH => 'main') ORDER BY id;
+----
+1	Alice	Alice@example.com
+2	Bob	Bob@example.com
+
+# Branch created before schema change - check if it has the column
+# The behavior depends on implementation - either:
+# a) Branch doesn't have email column (true snapshot)
+# b) Branch has email column but NULL values
+
+# For now, let's check just the original columns
+query IT
+SELECT id, name FROM users AT (BRANCH => 'before_email') ORDER BY id;
+----
+1	Alice
+2	Bob
+
+# ============================================================================
+# TEST 2: Create branch after schema change
+# ============================================================================
+
+statement ok
+SELECT * FROM ducklake_create_branch('schema_catalog', 'after_email');
+
+# New branch sees the email column with values
+query ITT
+SELECT id, name, email FROM users AT (BRANCH => 'after_email') ORDER BY id;
+----
+1	Alice	Alice@example.com
+2	Bob	Bob@example.com
+
+# ============================================================================
+# TEST 3: Insert new data on main with new schema
+# ============================================================================
+
+statement ok
+INSERT INTO users VALUES (3, 'Charlie', 'charlie@example.com');
+
+# Main has 3 users with email
+query I
+SELECT COUNT(*) FROM users AT (BRANCH => 'main');
+----
+3
+
+# before_email branch still has 2 users
+query I
+SELECT COUNT(*) FROM users AT (BRANCH => 'before_email');
+----
+2
+
+# after_email branch still has 2 users (forked before Charlie)
+query I
+SELECT COUNT(*) FROM users AT (BRANCH => 'after_email');
+----
+2
+
+# ============================================================================
+# TEST 4: Create table on main after branches exist
+# ============================================================================
+
+statement ok
+CREATE TABLE logs (
+    id BIGINT,
+    message VARCHAR,
+    created_at TIMESTAMP
+);
+
+statement ok
+INSERT INTO logs VALUES (1, 'System started', '2024-01-01 00:00:00');
+
+# Main can query logs
+query I
+SELECT COUNT(*) FROM logs AT (BRANCH => 'main');
+----
+1
+
+# Branches created before logs table was created - table doesn't exist
+statement error
+SELECT * FROM logs AT (BRANCH => 'before_email');
+----
+does not exist
+
+statement error
+SELECT * FROM logs AT (BRANCH => 'after_email');
+----
+does not exist
+
+# ============================================================================
+# TEST 5: Create branch after new table
+# ============================================================================
+
+statement ok
+SELECT * FROM ducklake_create_branch('schema_catalog', 'with_logs');
+
+# New branch can see logs
+query I
+SELECT COUNT(*) FROM logs AT (BRANCH => 'with_logs');
+----
+1
+
+# ============================================================================
+# CLEANUP
+# ============================================================================
+
+statement ok
+DROP TABLE logs;
+
+statement ok
+DROP TABLE users;
+
+statement ok
+DETACH schema_catalog;

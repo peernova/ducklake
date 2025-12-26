@@ -76,6 +76,25 @@ static void LoadInternal(ExtensionLoader &loader) {
 	DuckLakeLastCommittedSnapshotFunction last_committed;
 	loader.RegisterFunction(last_committed);
 
+	// Branch functions
+	auto list_branches = DuckLakeListBranchesFunction::GetFunction();
+	loader.RegisterFunction(list_branches);
+
+	auto create_branch = DuckLakeCreateBranchFunction::GetFunctions();
+	loader.RegisterFunction(create_branch);
+
+	auto delete_branch = DuckLakeDeleteBranchFunction::GetFunction();
+	loader.RegisterFunction(delete_branch);
+
+	auto branch_lineage = DuckLakeBranchLineageFunction::GetFunction();
+	loader.RegisterFunction(branch_lineage);
+
+	auto use_branch = DuckLakeUseBranchFunction::GetFunction();
+	loader.RegisterFunction(use_branch);
+
+	auto current_branch = DuckLakeCurrentBranchFunction::GetFunction();
+	loader.RegisterFunction(current_branch);
+
 	// secrets
 	auto secret_type = DuckLakeSecret::GetSecretType();
 	loader.RegisterSecretType(secret_type);

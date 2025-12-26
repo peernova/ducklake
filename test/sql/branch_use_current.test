@@ -1,0 +1,63 @@
+# name: test/sql/branch_use_current.test
+# description: Test ducklake_use_branch and ducklake_current_branch functions
+# group: [branching]
+
+require ducklake
+
+# Setup: Create DuckLake
+statement ok
+ATTACH ':memory:' AS meta_db;
+
+statement ok
+ATTACH 'ducklake:meta_db.ducklake_meta' AS lake;
+
+statement ok
+USE lake;
+
+# Verify default current branch is main
+query IIII
+SELECT * FROM ducklake_current_branch('lake');
+----
+lake	main	0	0
+
+# Create a dev branch
+query III
+SELECT * FROM ducklake_create_branch('lake', 'dev');
+----
+1	dev	0
+
+# Current branch should still be main
+query IIII
+SELECT * FROM ducklake_current_branch('lake');
+----
+lake	main	0	0
+
+# Switch to dev branch
+query IIII
+SELECT * FROM ducklake_use_branch('lake', 'dev');
+----
+lake	dev	1	0
+
+# Current branch should now be dev
+query IIII
+SELECT * FROM ducklake_current_branch('lake');
+----
+lake	dev	1	0
+
+# Switch back to main
+query IIII
+SELECT * FROM ducklake_use_branch('lake', 'main');
+----
+lake	main	0	0
+
+# Current branch should be main again
+query IIII
+SELECT * FROM ducklake_current_branch('lake');
+----
+lake	main	0	0
+
+# Test error handling for non-existent branch
+statement error
+SELECT * FROM ducklake_use_branch('lake', 'nonexistent');
+----
+Branch not found: nonexistent

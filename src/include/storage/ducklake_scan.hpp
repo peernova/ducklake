@@ -11,6 +11,7 @@
 #include "duckdb/common/common.hpp"
 #include "duckdb/function/table_function.hpp"
 #include "common/ducklake_snapshot.hpp"
+#include "common/ducklake_branch_ref.hpp"
 #include "common/index.hpp"
 
 namespace duckdb {
@@ -43,6 +44,15 @@ struct DuckLakeFunctionInfo : public TableFunctionInfo {
 	DuckLakeScanType scan_type = DuckLakeScanType::SCAN_TABLE;
 	//! Start snapshot - only set for DuckLakeScanType::SCAN_INSERTIONS and DuckLakeScanType::SCAN_DELETIONS
 	unique_ptr<DuckLakeSnapshot> start_snapshot;
+
+	//! Branch context for @ syntax (e.g., table@branch)
+	BranchIndex branch_id;
+	string branch_name;
+
+	//! Check if this scan is on a non-main branch
+	bool HasBranchContext() const {
+		return !branch_name.empty() && branch_name != "main";
+	}
 
 	shared_ptr<DuckLakeTransaction> GetTransaction();
 };

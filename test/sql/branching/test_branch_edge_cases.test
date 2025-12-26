@@ -1,0 +1,200 @@
+# name: test/sql/branching/test_branch_edge_cases.test
+# description: Test edge cases and error handling for branching
+# group: [branching]
+
+require ducklake
+
+# Create test catalog
+statement ok
+ATTACH 'ducklake:metadata=sqlite:__TEST_DIR__/edge_test.db data=__TEST_DIR__/edge_data' AS edge_catalog;
+
+statement ok
+USE edge_catalog;
+
+# ============================================================================
+# TEST 1: Branch naming
+# ============================================================================
+
+statement ok
+CREATE TABLE test_data (id INT, val VARCHAR);
+
+statement ok
+INSERT INTO test_data VALUES (1, 'initial');
+
+# Create branch with underscore
+statement ok
+SELECT * FROM ducklake_create_branch('edge_catalog', 'feature_456');
+
+# Create branch with numbers
+statement ok
+SELECT * FROM ducklake_create_branch('edge_catalog', 'v2');
+
+# Query branches
+query I
+SELECT COUNT(*) FROM test_data AT (BRANCH => 'feature_456');
+----
+1
+
+query I
+SELECT COUNT(*) FROM test_data AT (BRANCH => 'v2');
+----
+1
+
+# ============================================================================
+# TEST 2: Error handling - non-existent branch
+# ============================================================================
+
+statement error
+SELECT * FROM test_data AT (BRANCH => 'nonexistent');
+----
+Branch not found
+
+# ============================================================================
+# TEST 3: Error handling - cannot delete main
+# ============================================================================
+
+statement error
+SELECT * FROM ducklake_delete_branch('edge_catalog', 'main');
+----
+Cannot delete the main branch
+
+# ============================================================================
+# TEST 4: Recreate deleted branch with same name
+# ============================================================================
+
+statement ok
+SELECT * FROM ducklake_delete_branch('edge_catalog', 'v2');
+
+# Can create branch with same name after deletion
+statement ok
+SELECT * FROM ducklake_create_branch('edge_catalog', 'v2');
+
+# New branch sees current data
+query I
+SELECT COUNT(*) FROM test_data AT (BRANCH => 'v2');
+----
+1
+
+# ============================================================================
+# TEST 5: Empty branch (no changes after fork)
+# ============================================================================
+
+statement ok
+SELECT * FROM ducklake_create_branch('edge_catalog', 'empty_branch');
+
+# Query empty branch - should see parent data
+query I
+SELECT COUNT(*) FROM test_data AT (BRANCH => 'empty_branch');
+----
+1
+
+# ============================================================================
+# TEST 6: Multiple tables across branches
+# ============================================================================
+
+statement ok
+CREATE TABLE table_a (id INT);
+
+statement ok
+CREATE TABLE table_b (id INT);
+
+statement ok
+INSERT INTO table_a VALUES (1), (2);
+
+statement ok
+INSERT INTO table_b VALUES (10), (20);
+
+statement ok
+SELECT * FROM ducklake_create_branch('edge_catalog', 'multi_table');
+
+# Add more data to main after branch
+statement ok
+INSERT INTO table_a VALUES (3);
+
+statement ok
+DELETE FROM table_b WHERE id = 10;
+
+# Check differences
+query II
+SELECT 
+    (SELECT COUNT(*) FROM table_a AT (BRANCH => 'main')) as main_a,
+    (SELECT COUNT(*) FROM table_a AT (BRANCH => 'multi_table')) as branch_a;
+----
+3	2
+
+query II
+SELECT 
+    (SELECT COUNT(*) FROM table_b AT (BRANCH => 'main')) as main_b,
+    (SELECT COUNT(*) FROM table_b AT (BRANCH => 'multi_table')) as branch_b;
+----
+1	2
+
+# ============================================================================
+# TEST 7: Large number of branches
+# ============================================================================
+
+statement ok
+SELECT * FROM ducklake_create_branch('edge_catalog', 'b1');
+
+statement ok
+SELECT * FROM ducklake_create_branch('edge_catalog', 'b2');
+
+statement ok
+SELECT * FROM ducklake_create_branch('edge_catalog', 'b3');
+
+statement ok
+SELECT * FROM ducklake_create_branch('edge_catalog', 'b4');
+
+statement ok
+SELECT * FROM ducklake_create_branch('edge_catalog', 'b5');
+
+# Verify branches exist
+query I
+SELECT COUNT(*) FROM ducklake_branches('edge_catalog') WHERE status = 'active';
+----
+11
+
+# ============================================================================
+# TEST 8: Query all branches see consistent data at their fork point
+# ============================================================================
+
+query I
+SELECT COUNT(*) FROM test_data AT (BRANCH => 'b1');
+----
+1
+
+query I
+SELECT COUNT(*) FROM test_data AT (BRANCH => 'b5');
+----
+1
+
+# ============================================================================
+# TEST 9: Branch lineage verification
+# ============================================================================
+
+# All branches should have lineage back to main
+query I
+SELECT COUNT(*) FROM ducklake_branch_lineage('edge_catalog', 'b1') WHERE ancestor_branch_id = 0;
+----
+1
+
+query I
+SELECT COUNT(*) FROM ducklake_branch_lineage('edge_catalog', 'b5') WHERE ancestor_branch_id = 0;
+----
+1
+
+# ============================================================================
+# CLEANUP
+# ============================================================================
+
+statement ok
+DROP TABLE table_a;
+
+statement ok
+DROP TABLE table_b;
+
+statement ok
+DROP TABLE test_data;
+
+statement ok
+DETACH edge_catalog;

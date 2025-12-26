@@ -21,6 +21,7 @@ struct DuckLakeFilePartition {
 
 struct DuckLakeDeleteFile {
 	DataFileIndex data_file_id;
+	BranchIndex data_file_branch_id;  // Branch that owns the data file being deleted from
 	string data_file_path;
 	string file_name;
 	idx_t delete_count;

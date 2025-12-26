@@ -196,6 +196,18 @@ private:
 	//! The id of the last committed snapshot, set at FlushChanges on a successful commit
 	mutable mutex commit_lock;
 	optional_idx last_committed_snapshot;
+	//! The current working branch (defaults to 0 = main)
+	BranchIndex working_branch_id {0};
+
+public:
+	//! Get the current working branch for commits
+	BranchIndex GetWorkingBranch() const {
+		return working_branch_id;
+	}
+	//! Set the current working branch for commits
+	void SetWorkingBranch(BranchIndex branch_id) {
+		working_branch_id = branch_id;
+	}
 };
 
 } // namespace duckdb

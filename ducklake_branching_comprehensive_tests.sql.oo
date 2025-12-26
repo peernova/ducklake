@@ -1,0 +1,238 @@
+-- ============================================
+-- DUCKLAKE BRANCHING COMPREHENSIVE TEST SUITE
+-- ============================================
+-- Run with:
+-- ./build/release/duckdb -unsigned < ducklake_branching_comprehensive_tests.sql
+-- ============================================
+
+-- Load the extension
+LOAD 'build/release/extension/ducklake/ducklake.duckdb_extension';
+
+-- ============================================
+-- SETUP: Create Fresh DuckLake Catalog
+-- ============================================
+ATTACH 'ducklake:test_branch.ducklake' AS test_lake;
+USE test_lake;
+
+
+
+
+
+-- ============================================================================
+-- TEST 1: Basic Branch Isolation for Data
+-- ============================================================================
+SELECT '=== TEST 1: Basic Branch Isolation for Data ===' as test_section;
+
+-- Create table and insert data on main branch
+CREATE TABLE test_lake.main.employees (id INT, name VARCHAR, department VARCHAR);
+INSERT INTO test_lake.main.employees VALUES 
+    (1, 'Alice', 'Engineering'),
+    (2, 'Bob', 'Sales'),
+    (3, 'Charlie', 'Marketing');
+
+SELECT 'Main branch initial count' as test, COUNT(*) as result, 3 as expected FROM test_lake.main.employees;
+
+-- Create dev branch
+CALL ducklake_create_branch('test_lake', 'dev_branch');
+
+-- Switch to dev branch and add data
+CALL ducklake_use_branch('test_lake', 'dev_branch');
+INSERT INTO test_lake.main.employees VALUES 
+    (4, 'Diana', 'Engineering'),
+    (5, 'Eve', 'Sales');
+
+SELECT 'Dev branch count after insert' as test, COUNT(*) as result, 5 as expected FROM test_lake.main.employees;
+
+-- Switch back to main - should NOT see Diana and Eve
+CALL ducklake_use_branch('test_lake', 'main');
+SELECT 'Main branch count (should NOT include dev data)' as test, COUNT(*) as result, 3 as expected FROM test_lake.main.employees;
+
+-- Verify actual data on main
+SELECT 'Main branch employees:' as info;
+SELECT * FROM test_lake.main.employees ORDER BY id;
+
+-- ============================================================================
+-- TEST 2: Schema Changes Isolation (ADD COLUMN)
+-- ============================================================================
+SELECT '=== TEST 2: Schema Changes Isolation (ADD COLUMN) ===' as test_section;
+
+-- Switch to dev branch and add a column
+CALL ducklake_use_branch('test_lake', 'dev_branch');
+ALTER TABLE test_lake.main.employees ADD COLUMN salary INT DEFAULT 50000;
+
+-- Update salary on dev branch
+UPDATE test_lake.main.employees SET salary = 75000 WHERE name = 'Alice';
+UPDATE test_lake.main.employees SET salary = 65000 WHERE name = 'Bob';
+
+SELECT 'Dev branch with salary column:' as info;
+SELECT * FROM test_lake.main.employees ORDER BY id;
+
+-- Switch back to main - salary column should NOT exist
+CALL ducklake_use_branch('test_lake', 'main');
+SELECT 'Main branch columns (should NOT have salary):' as info;
+SELECT column_name FROM (DESCRIBE test_lake.main.employees);
+
+-- ============================================================================
+-- TEST 3: New Table Isolation
+-- ============================================================================
+SELECT '=== TEST 3: New Table Isolation ===' as test_section;
+
+-- Switch to dev branch and create a new table
+CALL ducklake_use_branch('test_lake', 'dev_branch');
+CREATE TABLE test_lake.main.projects (id INT, name VARCHAR, lead_id INT);
+INSERT INTO test_lake.main.projects VALUES 
+    (1, 'Project Alpha', 1),
+    (2, 'Project Beta', 4);
+
+SELECT 'Dev branch projects table:' as info;
+SELECT * FROM test_lake.main.projects ORDER BY id;
+
+-- Switch back to main - projects table should NOT exist
+CALL ducklake_use_branch('test_lake', 'main');
+SELECT 'Tables on main branch:' as info;
+SELECT table_name FROM duckdb_tables() WHERE database_name = 'test_lake' AND schema_name = 'main';
+
+-- ============================================================================
+-- TEST 4: Multiple Branches from Same Parent
+-- ============================================================================
+SELECT '=== TEST 4: Multiple Branches from Same Parent ===' as test_section;
+
+-- Create another branch from main
+CALL ducklake_create_branch('test_lake', 'feature_branch');
+CALL ducklake_use_branch('test_lake', 'feature_branch');
+
+-- Add different data on feature branch
+INSERT INTO test_lake.main.employees VALUES (6, 'Frank', 'HR');
+
+SELECT 'Feature branch count' as test, COUNT(*) as result, 4 as expected FROM test_lake.main.employees;
+
+-- Verify all three branches have correct counts
+CALL ducklake_use_branch('test_lake', 'main');
+SELECT 'Main branch count' as test, COUNT(*) as result, 3 as expected FROM test_lake.main.employees;
+
+CALL ducklake_use_branch('test_lake', 'dev_branch');
+SELECT 'Dev branch count' as test, COUNT(*) as result, 5 as expected FROM test_lake.main.employees;
+
+CALL ducklake_use_branch('test_lake', 'feature_branch');
+SELECT 'Feature branch count' as test, COUNT(*) as result, 4 as expected FROM test_lake.main.employees;
+
+-- ============================================================================
+-- TEST 5: Delete Isolation
+-- ============================================================================
+SELECT '=== TEST 5: Delete Isolation ===' as test_section;
+
+-- On feature branch, delete a record
+CALL ducklake_use_branch('test_lake', 'feature_branch');
+DELETE FROM test_lake.main.employees WHERE name = 'Charlie';
+
+SELECT 'Feature branch after delete' as test, COUNT(*) as result, 3 as expected FROM test_lake.main.employees;
+SELECT 'Feature branch employees after delete:' as info;
+SELECT * FROM test_lake.main.employees ORDER BY id;
+
+-- Main should still have Charlie
+CALL ducklake_use_branch('test_lake', 'main');
+SELECT 'Main branch still has Charlie' as test, COUNT(*) as result, 3 as expected FROM test_lake.main.employees;
+SELECT 'Charlie exists on main' as test, COUNT(*) as result, 1 as expected FROM test_lake.main.employees WHERE name = 'Charlie';
+
+-- ============================================================================
+-- TEST 6: Update Isolation
+-- ============================================================================
+SELECT '=== TEST 6: Update Isolation ===' as test_section;
+
+-- On dev branch, update a record
+CALL ducklake_use_branch('test_lake', 'dev_branch');
+UPDATE test_lake.main.employees SET department = 'Executive' WHERE name = 'Alice';
+
+SELECT 'Dev branch Alice department' as test, department as result, 'Executive' as expected 
+FROM test_lake.main.employees WHERE name = 'Alice';
+
+-- Main should still have Alice in Engineering
+CALL ducklake_use_branch('test_lake', 'main');
+SELECT 'Main branch Alice department' as test, department as result, 'Engineering' as expected 
+FROM test_lake.main.employees WHERE name = 'Alice';
+
+-- ============================================================================
+-- TEST 7: Branch AT Clause (Time Travel within Branch)
+-- ============================================================================
+SELECT '=== TEST 7: Branch AT Clause ===' as test_section;
+
+-- Add more data to main
+INSERT INTO test_lake.main.employees VALUES (7, 'Grace', 'Finance');
+SELECT 'Main after adding Grace' as test, COUNT(*) as result, 4 as expected FROM test_lake.main.employees;
+
+-- Query main at earlier version (before Grace)
+SELECT 'Main at version 2 (before Grace)' as test, COUNT(*) as result, 3 as expected 
+FROM test_lake.main.employees AT (VERSION => 2);
+
+-- ============================================================================
+-- TEST 8: Verify Metadata State
+-- ============================================================================
+SELECT '=== TEST 8: Metadata State ===' as test_section;
+
+SELECT 'Branches:' as info;
+SELECT branch_id, branch_name, parent_branch_id, fork_snapshot_id, head_snapshot_id 
+FROM "__ducklake_metadata_test_lake".main.ducklake_branch 
+ORDER BY branch_id;
+
+SELECT 'Branch Lineage:' as info;
+SELECT * FROM "__ducklake_metadata_test_lake".main.ducklake_branch_lineage 
+ORDER BY branch_id, ancestor_branch_id;
+
+SELECT 'Data Files:' as info;
+SELECT branch_id, data_file_id, table_id, begin_snapshot, end_snapshot
+FROM "__ducklake_metadata_test_lake".main.ducklake_data_file 
+ORDER BY branch_id, data_file_id;
+
+-- ============================================================================
+-- TEST 9: Nested Branch (Branch from Branch)
+-- ============================================================================
+SELECT '=== TEST 9: Nested Branch (Branch from Branch) ===' as test_section;
+
+-- Create a branch from dev_branch
+CALL ducklake_use_branch('test_lake', 'dev_branch');
+CALL ducklake_create_branch('test_lake', 'dev_feature');
+CALL ducklake_use_branch('test_lake', 'dev_feature');
+
+-- Add data on nested branch (dev_branch has salary column, so include it)
+INSERT INTO test_lake.main.employees VALUES (8, 'Henry', 'Legal', 55000);
+
+SELECT 'Dev_feature branch count (inherits from dev)' as test, COUNT(*) as result, 6 as expected FROM test_lake.main.employees;
+
+-- Verify dev_branch doesn't see Henry
+CALL ducklake_use_branch('test_lake', 'dev_branch');
+SELECT 'Dev branch count (should NOT have Henry)' as test, COUNT(*) as result, 5 as expected FROM test_lake.main.employees;
+
+-- Verify main doesn't see any of the branch data
+CALL ducklake_use_branch('test_lake', 'main');
+SELECT 'Main branch count (original + Grace)' as test, COUNT(*) as result, 4 as expected FROM test_lake.main.employees;
+
+-- ============================================================================
+-- TEST 10: Verify Column Visibility
+-- ============================================================================
+SELECT '=== TEST 10: Column Visibility ===' as test_section;
+
+-- Dev branch should have salary column
+CALL ducklake_use_branch('test_lake', 'dev_branch');
+SELECT 'Dev branch column count' as test, COUNT(*) as result, 4 as expected 
+FROM (DESCRIBE test_lake.main.employees);
+
+-- Main branch should NOT have salary column
+CALL ducklake_use_branch('test_lake', 'main');
+SELECT 'Main branch column count' as test, COUNT(*) as result, 3 as expected 
+FROM (DESCRIBE test_lake.main.employees);
+
+-- ============================================================================
+-- SUMMARY
+-- ============================================================================
+SELECT '=== TEST SUMMARY ===' as test_section;
+SELECT 'All tests completed. Review results above for PASS/FAIL status.' as summary;
+
+
+
+SELECT 'Delete files:' as info;
+SELECT branch_id, delete_file_id, table_id, data_file_id, data_file_branch_id, begin_snapshot, end_snapshot
+FROM "__ducklake_metadata_test_lake".main.ducklake_delete_file 
+ORDER BY branch_id, delete_file_id;
+
+
+

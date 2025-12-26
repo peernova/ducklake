@@ -1,0 +1,204 @@
+# name: test/sql/branching/test_nested_branches.test
+# description: Test nested branches (branches created from other branches)
+# group: [branching]
+# NOTE: Branches are read-only snapshots. This tests the lineage and visibility.
+
+require ducklake
+
+# Create test catalog
+statement ok
+ATTACH 'ducklake:metadata=sqlite:__TEST_DIR__/nested_test.db data=__TEST_DIR__/nested_data' AS nested_catalog;
+
+statement ok
+USE nested_catalog;
+
+# ============================================================================
+# SETUP: Create initial data on main
+# ============================================================================
+
+statement ok
+CREATE TABLE commits (
+    id BIGINT,
+    message VARCHAR,
+    author VARCHAR
+);
+
+statement ok
+INSERT INTO commits VALUES (1, 'Initial commit', 'alice');
+
+query I
+SELECT COUNT(*) FROM commits AT (BRANCH => 'main');
+----
+1
+
+# ============================================================================
+# TEST 1: Create branch hierarchy with data at different points
+# ============================================================================
+
+# Create snapshot after initial commit
+statement ok
+SELECT * FROM ducklake_create_branch('nested_catalog', 'v1_release');
+
+# Add more commits to main
+statement ok
+INSERT INTO commits VALUES (2, 'Add feature A', 'bob');
+
+# Create another snapshot
+statement ok
+SELECT * FROM ducklake_create_branch('nested_catalog', 'v2_release');
+
+# Add more commits to main
+statement ok
+INSERT INTO commits VALUES (3, 'Add feature B', 'charlie');
+
+# Create snapshot from v2 (not from main)
+statement ok
+SELECT * FROM ducklake_create_branch('nested_catalog', 'v2_hotfix', 'v2_release');
+
+# Add more to main
+statement ok
+INSERT INTO commits VALUES (4, 'Add feature C', 'dave');
+
+# Verify branch hierarchy
+query II
+SELECT branch_id, branch_name FROM ducklake_branches('nested_catalog') ORDER BY branch_id;
+----
+0	main
+1	v1_release
+2	v2_release
+3	v2_hotfix
+
+# ============================================================================
+# TEST 2: Verify data visibility follows fork points
+# ============================================================================
+
+# main: sees all 4 commits
+query I
+SELECT COUNT(*) FROM commits AT (BRANCH => 'main');
+----
+4
+
+query T
+SELECT message FROM commits AT (BRANCH => 'main') ORDER BY id;
+----
+Initial commit
+Add feature A
+Add feature B
+Add feature C
+
+# v1_release: sees only commit 1 (forked after initial)
+query I
+SELECT COUNT(*) FROM commits AT (BRANCH => 'v1_release');
+----
+1
+
+query T
+SELECT message FROM commits AT (BRANCH => 'v1_release') ORDER BY id;
+----
+Initial commit
+
+# v2_release: sees commits 1, 2 (forked after feature A)
+query I
+SELECT COUNT(*) FROM commits AT (BRANCH => 'v2_release');
+----
+2
+
+query T
+SELECT message FROM commits AT (BRANCH => 'v2_release') ORDER BY id;
+----
+Initial commit
+Add feature A
+
+# v2_hotfix: sees same as v2_release (forked from v2, not main)
+query I
+SELECT COUNT(*) FROM commits AT (BRANCH => 'v2_hotfix');
+----
+2
+
+query T
+SELECT message FROM commits AT (BRANCH => 'v2_hotfix') ORDER BY id;
+----
+Initial commit
+Add feature A
+
+# ============================================================================
+# TEST 3: Verify branch lineage
+# ============================================================================
+
+# Check v1_release lineage (should see main + v1_release)
+query I
+SELECT COUNT(*) FROM ducklake_branch_lineage('nested_catalog', 'v1_release');
+----
+2
+
+# Check v2_hotfix lineage (should see main + v2_release + v2_hotfix)
+query I
+SELECT COUNT(*) FROM ducklake_branch_lineage('nested_catalog', 'v2_hotfix');
+----
+3
+
+# ============================================================================
+# TEST 4: Updates on main don't affect branches
+# ============================================================================
+
+statement ok
+UPDATE commits SET author = 'alice_updated' WHERE id = 1;
+
+# Main has updated author
+query T
+SELECT author FROM commits AT (BRANCH => 'main') WHERE id = 1;
+----
+alice_updated
+
+# All branches have original author
+query T
+SELECT author FROM commits AT (BRANCH => 'v1_release') WHERE id = 1;
+----
+alice
+
+query T
+SELECT author FROM commits AT (BRANCH => 'v2_release') WHERE id = 1;
+----
+alice
+
+query T
+SELECT author FROM commits AT (BRANCH => 'v2_hotfix') WHERE id = 1;
+----
+alice
+
+# ============================================================================
+# TEST 5: Deletion constraints - can't delete with children
+# ============================================================================
+
+# Can't delete v2_release because v2_hotfix depends on it
+statement error
+SELECT * FROM ducklake_delete_branch('nested_catalog', 'v2_release');
+----
+Cannot delete branch with active child branches
+
+# Can delete leaf nodes
+statement ok
+SELECT * FROM ducklake_delete_branch('nested_catalog', 'v2_hotfix');
+
+# Now can delete v2_release
+statement ok
+SELECT * FROM ducklake_delete_branch('nested_catalog', 'v2_release');
+
+# Can delete v1_release (no children)
+statement ok
+SELECT * FROM ducklake_delete_branch('nested_catalog', 'v1_release');
+
+query II
+SELECT branch_id, branch_name FROM ducklake_branches('nested_catalog');
+----
+0	main
+
+# ============================================================================
+# CLEANUP
+# ============================================================================
+
+statement ok
+DROP TABLE commits;
+
+statement ok
+DETACH nested_catalog;

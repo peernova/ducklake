@@ -1,0 +1,162 @@
+# name: test/sql/branching/test_branch_compaction.test
+# description: Test compaction behavior with branches
+# group: [branching]
+# NOTE: Branches are read-only snapshots. Compaction affects the main branch.
+
+require ducklake
+
+# Create test catalog
+statement ok
+ATTACH 'ducklake:metadata=sqlite:__TEST_DIR__/compact_test.db data=__TEST_DIR__/compact_data' AS compact_catalog;
+
+statement ok
+USE compact_catalog;
+
+# ============================================================================
+# SETUP: Create table with multiple files on main
+# ============================================================================
+
+statement ok
+CREATE TABLE events (id BIGINT, data VARCHAR);
+
+# Insert batch 1 (creates file F1)
+statement ok
+INSERT INTO events SELECT i, 'batch1_' || i FROM range(1000) t(i);
+
+# Insert batch 2 (creates file F2)
+statement ok
+INSERT INTO events SELECT i + 1000, 'batch2_' || i FROM range(1000) t(i);
+
+query I
+SELECT COUNT(*) FROM events;
+----
+2000
+
+# ============================================================================
+# TEST: Create branch before compaction
+# ============================================================================
+
+statement ok
+SELECT * FROM ducklake_create_branch('compact_catalog', 'pre_compact');
+
+# Both see 2000 rows
+query I
+SELECT COUNT(*) FROM events AT (BRANCH => 'main');
+----
+2000
+
+query I
+SELECT COUNT(*) FROM events AT (BRANCH => 'pre_compact');
+----
+2000
+
+# ============================================================================
+# TEST: Compact on main - branch should still work
+# ============================================================================
+
+# Run compaction on main (merges F1 + F2 -> F3)
+statement ok
+CALL ducklake_merge_adjacent_files('compact_catalog', 'events');
+
+# Main still sees 2000 rows (now from compacted file F3)
+query I
+SELECT COUNT(*) FROM events AT (BRANCH => 'main');
+----
+2000
+
+# Branch still sees 2000 rows (from original F1 + F2)
+query I
+SELECT COUNT(*) FROM events AT (BRANCH => 'pre_compact');
+----
+2000
+
+# ============================================================================
+# TEST: Insert after compaction
+# ============================================================================
+
+statement ok
+INSERT INTO events SELECT i + 2000, 'batch3_' || i FROM range(500) t(i);
+
+# Main sees 2500
+query I
+SELECT COUNT(*) FROM events AT (BRANCH => 'main');
+----
+2500
+
+# Branch still sees 2000
+query I
+SELECT COUNT(*) FROM events AT (BRANCH => 'pre_compact');
+----
+2000
+
+# ============================================================================
+# TEST: Create branch after compaction
+# ============================================================================
+
+statement ok
+SELECT * FROM ducklake_create_branch('compact_catalog', 'post_compact');
+
+# New branch sees 2500 (current main state)
+query I
+SELECT COUNT(*) FROM events AT (BRANCH => 'post_compact');
+----
+2500
+
+# ============================================================================
+# TEST: Delete on main after branch
+# ============================================================================
+
+statement ok
+DELETE FROM events WHERE id < 100;
+
+query I
+SELECT COUNT(*) FROM events AT (BRANCH => 'main');
+----
+2400
+
+# Both branches unaffected
+query I
+SELECT COUNT(*) FROM events AT (BRANCH => 'pre_compact');
+----
+2000
+
+query I
+SELECT COUNT(*) FROM events AT (BRANCH => 'post_compact');
+----
+2500
+
+# ============================================================================
+# TEST: Verify specific data isolation
+# ============================================================================
+
+# Insert on main
+statement ok
+INSERT INTO events VALUES (9999, 'main_only');
+
+# pre_compact branch doesn't see it
+query I
+SELECT COUNT(*) FROM events AT (BRANCH => 'pre_compact') WHERE id = 9999;
+----
+0
+
+# post_compact doesn't see it either
+query I
+SELECT COUNT(*) FROM events AT (BRANCH => 'post_compact') WHERE id = 9999;
+----
+0
+
+# Main sees it
+query I
+SELECT COUNT(*) FROM events AT (BRANCH => 'main') WHERE id = 9999;
+----
+1
+
+# ============================================================================
+# CLEANUP
+# ============================================================================
+
+statement ok
+DROP TABLE events;
+
+statement ok
+DETACH compact_catalog;

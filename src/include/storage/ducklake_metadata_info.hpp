@@ -139,6 +139,7 @@ struct DuckLakePartialFileInfo {
 };
 
 struct DuckLakeFileInfo {
+	BranchIndex branch_id;
 	DataFileIndex id;
 	TableIndex table_id;
 	string file_name;
@@ -148,6 +149,7 @@ struct DuckLakeFileInfo {
 	optional_idx row_id_start;
 	optional_idx partition_id;
 	optional_idx begin_snapshot;
+	optional_idx end_snapshot;
 	optional_idx max_partial_file_snapshot;
 	string encryption_key;
 	MappingIndex mapping_id;
@@ -169,14 +171,18 @@ struct DuckLakeDeletedInlinedDataInfo {
 };
 
 struct DuckLakeDeleteFileInfo {
+	BranchIndex branch_id;
 	DataFileIndex id;
 	TableIndex table_id;
 	DataFileIndex data_file_id;
+	BranchIndex data_file_branch_id;  // Branch that owns the data file being deleted from
 	string path;
 	idx_t delete_count;
 	idx_t file_size_bytes;
 	idx_t footer_size;
 	string encryption_key;
+	optional_idx begin_snapshot;
+	optional_idx end_snapshot;
 };
 
 struct DuckLakePartitionFieldInfo {
@@ -245,6 +251,7 @@ struct SnapshotDeletedFromFiles {
 };
 
 struct DuckLakeSnapshotInfo {
+	BranchIndex branch_id;
 	idx_t id;
 	timestamp_tz_t time;
 	idx_t schema_version;
@@ -311,6 +318,7 @@ enum class DuckLakeDataType {
 };
 
 struct DuckLakeFileListEntry {
+	BranchIndex branch_id;
 	DuckLakeFileData file;
 	DuckLakeFileData delete_file;
 	optional_idx row_id_start;
@@ -332,6 +340,7 @@ struct DuckLakeDeleteScanEntry {
 };
 
 struct DuckLakeFileListExtendedEntry {
+	BranchIndex branch_id;
 	DataFileIndex file_id;
 	DataFileIndex delete_file_id;
 	DuckLakeFileData file;
@@ -344,6 +353,7 @@ struct DuckLakeFileListExtendedEntry {
 };
 
 struct DuckLakeCompactionBaseFileData {
+	BranchIndex branch_id;
 	DataFileIndex id;
 	DuckLakeFileData data;
 	idx_t row_count = 0;

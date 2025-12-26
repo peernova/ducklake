@@ -1,0 +1,146 @@
+# name: test/sql/branching/test_at_clause_branch.test
+# description: Test AT clause BRANCH syntax for reading from branches
+# group: [branching]
+
+require ducklake
+
+# Create test catalog
+statement ok
+ATTACH 'ducklake:metadata=sqlite:__TEST_DIR__/at_clause_branch_test.db data=__TEST_DIR__/at_clause_branch_data' AS test_catalog;
+
+statement ok
+USE test_catalog;
+
+# ============================================================================
+# SETUP: Create table and initial data
+# ============================================================================
+
+statement ok
+CREATE TABLE products (id BIGINT, name VARCHAR, price DECIMAL(10,2));
+
+statement ok
+INSERT INTO products VALUES (1, 'Widget', 9.99), (2, 'Gadget', 19.99), (3, 'Gizmo', 29.99);
+
+# Create dev branch (fork from current state)
+statement ok
+SELECT * FROM ducklake_create_branch('test_catalog', 'dev');
+
+# ============================================================================
+# TEST 1: AT (BRANCH => 'name') syntax for SELECT
+# ============================================================================
+
+# Query main branch explicitly using AT clause
+query I
+SELECT COUNT(*) FROM products AT (BRANCH => 'main');
+----
+3
+
+# Query dev branch using AT clause
+query I
+SELECT COUNT(*) FROM products AT (BRANCH => 'dev');
+----
+3
+
+# ============================================================================
+# TEST 2: Modify main, verify branches see fork-point data
+# ============================================================================
+
+# Insert on main
+statement ok
+INSERT INTO products VALUES (4, 'Doohickey', 39.99);
+
+# Verify with AT clause - main has 4 rows
+query I
+SELECT COUNT(*) FROM products AT (BRANCH => 'main');
+----
+4
+
+# Verify with AT clause - dev still has 3 (forked before insert)
+query I
+SELECT COUNT(*) FROM products AT (BRANCH => 'dev');
+----
+3
+
+# ============================================================================
+# TEST 3: Combine with VERSION syntax
+# ============================================================================
+
+# Query at specific version on main branch
+query I
+SELECT COUNT(*) FROM products AT (VERSION => 2);
+----
+3
+
+# ============================================================================
+# TEST 4: AT clause in JOINs
+# ============================================================================
+
+statement ok
+CREATE TABLE orders (id BIGINT, product_id BIGINT, quantity INT);
+
+statement ok
+INSERT INTO orders VALUES (1, 1, 5), (2, 2, 3);
+
+# Create branch before adding order for new product
+statement ok
+SELECT * FROM ducklake_create_branch('test_catalog', 'orders_v1');
+
+# Insert order for the Doohickey (product 4, only on main)
+statement ok
+INSERT INTO orders VALUES (3, 4, 10);
+
+# Join main orders with main products using AT clause
+query III
+SELECT o.id, p.name, o.quantity 
+FROM orders AT (BRANCH => 'main') o 
+JOIN products AT (BRANCH => 'main') p ON o.product_id = p.id 
+ORDER BY o.id;
+----
+1	Widget	5
+2	Gadget	3
+3	Doohickey	10
+
+# Join dev orders with dev products (Doohickey doesn't exist, order 3 doesn't exist)
+query III
+SELECT o.id, p.name, o.quantity 
+FROM orders AT (BRANCH => 'dev') o 
+JOIN products AT (BRANCH => 'dev') p ON o.product_id = p.id 
+ORDER BY o.id;
+----
+1	Widget	5
+2	Gadget	3
+
+# ============================================================================
+# TEST 5: Compare counts across branches
+# ============================================================================
+
+query III
+SELECT 
+    (SELECT COUNT(*) FROM products AT (BRANCH => 'main')) AS main_count,
+    (SELECT COUNT(*) FROM products AT (BRANCH => 'dev')) AS dev_count,
+    (SELECT COUNT(*) FROM products AT (BRANCH => 'orders_v1')) AS orders_v1_count;
+----
+4	3	4
+
+# ============================================================================
+# TEST 6: Error cases
+# ============================================================================
+
+# Non-existent branch
+statement error
+SELECT * FROM products AT (BRANCH => 'nonexistent');
+----
+Branch not found
+
+# ============================================================================
+# CLEANUP
+# ============================================================================
+
+statement ok
+DROP TABLE orders;
+
+statement ok
+DROP TABLE products;
+
+statement ok
+DETACH test_catalog;

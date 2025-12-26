@@ -1,0 +1,213 @@
+# name: test/sql/branching/test_branch_basic.test
+# description: Basic branching functionality tests - SELECT with AT clause
+# group: [branching]
+
+require ducklake
+
+# Create test catalog with SQLite metadata
+statement ok
+ATTACH 'ducklake:metadata=sqlite:__TEST_DIR__/branch_test.db data=__TEST_DIR__/branch_data' AS branch_catalog;
+
+statement ok
+USE branch_catalog;
+
+# ============================================================================
+# TEST: Main branch exists by default
+# ============================================================================
+
+query ITIII
+SELECT branch_id, branch_name, parent_branch_id, fork_snapshot_id, head_snapshot_id 
+FROM ducklake_branches('branch_catalog');
+----
+0	main	NULL	NULL	0
+
+# ============================================================================
+# TEST: Create table and insert data on main
+# ============================================================================
+
+statement ok
+CREATE TABLE users (id BIGINT, name VARCHAR);
+
+statement ok
+INSERT INTO users VALUES (1, 'Alice'), (2, 'Bob'), (3, 'Charlie');
+
+query I
+SELECT COUNT(*) FROM users;
+----
+3
+
+# ============================================================================
+# TEST: Create feature branch
+# ============================================================================
+
+query ITI
+SELECT branch_id, branch_name, head_snapshot_id FROM ducklake_create_branch('branch_catalog', 'dev');
+----
+1	dev	(.*?)
+
+query II
+SELECT branch_id, branch_name FROM ducklake_branches('branch_catalog') ORDER BY branch_id;
+----
+0	main
+1	dev
+
+# ============================================================================
+# TEST: Verify lineage
+# ============================================================================
+
+query III
+SELECT branch_id, ancestor_branch_id, max_visible_snapshot 
+FROM ducklake_branch_lineage('branch_catalog', 'dev') 
+ORDER BY ancestor_branch_id;
+----
+1	0	(.*?)
+1	1	9223372036854775807
+
+# ============================================================================
+# TEST: Query branch using AT clause syntax - both see same data
+# ============================================================================
+
+# Both branches see same data initially (dev forked from main)
+query I
+SELECT COUNT(*) FROM users AT (BRANCH => 'dev');
+----
+3
+
+query I
+SELECT COUNT(*) FROM users AT (BRANCH => 'main');
+----
+3
+
+# Verify actual rows
+query IT
+SELECT id, name FROM users AT (BRANCH => 'dev') ORDER BY id;
+----
+1	Alice
+2	Bob
+3	Charlie
+
+query IT
+SELECT id, name FROM users AT (BRANCH => 'main') ORDER BY id;
+----
+1	Alice
+2	Bob
+3	Charlie
+
+# ============================================================================
+# TEST: Insert on main - not visible to branch (forked before)
+# ============================================================================
+
+# Insert goes to main (default)
+statement ok
+INSERT INTO users VALUES (4, 'Dave');
+
+# Main sees 4 rows
+query I
+SELECT COUNT(*) FROM users AT (BRANCH => 'main');
+----
+4
+
+# Dev still sees 3 rows (forked before Dave was added)
+query I
+SELECT COUNT(*) FROM users AT (BRANCH => 'dev');
+----
+3
+
+# Default query goes to main
+query I
+SELECT COUNT(*) FROM users;
+----
+4
+
+# ============================================================================
+# TEST: Nested branches
+# ============================================================================
+
+query ITI
+SELECT branch_id, branch_name, head_snapshot_id 
+FROM ducklake_create_branch('branch_catalog', 'dev_feature', 'dev');
+----
+2	dev_feature	(.*?)
+
+# Dev-feature sees what dev sees (3 rows)
+query I
+SELECT COUNT(*) FROM users AT (BRANCH => 'dev_feature');
+----
+3
+
+# Main still has 4
+query I
+SELECT COUNT(*) FROM users AT (BRANCH => 'main');
+----
+4
+
+# ============================================================================
+# TEST: Query at specific version using AT clause
+# ============================================================================
+
+# Query at version 1 (after table creation, before data)
+query I
+SELECT COUNT(*) FROM users AT (VERSION => 1);
+----
+0
+
+# Query at version 2 (after initial insert of 3 rows)
+query I
+SELECT COUNT(*) FROM users AT (VERSION => 2);
+----
+3
+
+# ============================================================================
+# TEST: Delete branch
+# ============================================================================
+
+# Can't delete dev because dev_feature is a child
+statement error
+SELECT * FROM ducklake_delete_branch('branch_catalog', 'dev');
+----
+Cannot delete branch with active child branches
+
+# Delete leaf first
+statement ok
+SELECT * FROM ducklake_delete_branch('branch_catalog', 'dev_feature');
+
+# Now can delete dev
+statement ok
+SELECT * FROM ducklake_delete_branch('branch_catalog', 'dev');
+
+query II
+SELECT branch_id, branch_name FROM ducklake_branches('branch_catalog');
+----
+0	main
+
+# ============================================================================
+# TEST: Recreate branch with same name
+# ============================================================================
+
+query ITI
+SELECT branch_id, branch_name, head_snapshot_id FROM ducklake_create_branch('branch_catalog', 'dev');
+----
+3	dev	(.*?)
+
+# New branch ID (3, not 1)
+query II
+SELECT branch_id, branch_name FROM ducklake_branches('branch_catalog') ORDER BY branch_id;
+----
+0	main
+3	dev
+
+# New dev branch sees current main state (4 rows)
+query I
+SELECT COUNT(*) FROM users AT (BRANCH => 'dev');
+----
+4
+
+# ============================================================================
+# CLEANUP
+# ============================================================================
+
+statement ok
+DROP TABLE users;
+
+statement ok
+DETACH branch_catalog;

@@ -11,6 +11,7 @@
 #include "ducklake_macro_entry.hpp"
 #include "common/ducklake_data_file.hpp"
 #include "common/ducklake_snapshot.hpp"
+#include "common/ducklake_branch_ref.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
 #include "duckdb/common/types/value_map.hpp"
 #include "duckdb/main/connection.hpp"
@@ -158,6 +159,15 @@ public:
 	//! Otherwise, it is an id that is incremented whenever the schema changes (not stored between restarts)
 	idx_t GetCatalogVersion();
 
+	//! Set the branch context for @ syntax lookups
+	void SetBranchContext(const DuckLakeBranchRef &branch_ref);
+	//! Get the current branch context (if any)
+	const DuckLakeBranchRef &GetBranchContext() const;
+	//! Check if a branch context is set
+	bool HasBranchContext() const;
+	//! Clear the branch context
+	void ClearBranchContext();
+
 protected:
 	void SetMetadataManager(unique_ptr<DuckLakeMetadataManager> metadata_manager) {
 		this->metadata_manager = std::move(metadata_manager);
@@ -240,6 +250,9 @@ private:
 	DuckLakeNameMapSet new_name_maps;
 
 	atomic<idx_t> catalog_version;
+
+	//! Branch context for @ syntax lookups (e.g., table@branch)
+	DuckLakeBranchRef branch_context;
 };
 
 } // namespace duckdb

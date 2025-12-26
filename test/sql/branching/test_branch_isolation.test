@@ -1,0 +1,210 @@
+# name: test/sql/branching/test_branch_isolation.test
+# description: Test data isolation between branches - READ ONLY branch access
+# group: [branching]
+# NOTE: Currently branches are read-only snapshots. DML goes to main branch only.
+
+require ducklake
+
+# Create test catalog
+statement ok
+ATTACH 'ducklake:metadata=sqlite:__TEST_DIR__/isolation_test.db data=__TEST_DIR__/isolation_data' AS test_catalog;
+
+statement ok
+USE test_catalog;
+
+# ============================================================================
+# SETUP: Create table and initial data on main
+# ============================================================================
+
+statement ok
+CREATE TABLE inventory (
+    product_id BIGINT,
+    name VARCHAR,
+    quantity INT,
+    price DECIMAL(10,2)
+);
+
+statement ok
+INSERT INTO inventory VALUES 
+    (1, 'Laptop', 100, 999.99),
+    (2, 'Mouse', 500, 29.99),
+    (3, 'Keyboard', 300, 79.99);
+
+query I
+SELECT COUNT(*) FROM inventory;
+----
+3
+
+# ============================================================================
+# TEST 1: Create branch - sees data at fork point
+# ============================================================================
+
+statement ok
+SELECT * FROM ducklake_create_branch('test_catalog', 'snapshot_v1');
+
+# Branch sees the 3 initial rows
+query I
+SELECT COUNT(*) FROM inventory AT (BRANCH => 'snapshot_v1');
+----
+3
+
+query IT
+SELECT product_id, name FROM inventory AT (BRANCH => 'snapshot_v1') ORDER BY product_id;
+----
+1	Laptop
+2	Mouse
+3	Keyboard
+
+# ============================================================================
+# TEST 2: Insert on main - branch doesn't see it
+# ============================================================================
+
+statement ok
+INSERT INTO inventory VALUES (4, 'Monitor', 50, 299.99);
+
+# Main sees 4 rows
+query I
+SELECT COUNT(*) FROM inventory AT (BRANCH => 'main');
+----
+4
+
+# Branch still sees 3 (forked before Monitor was added)
+query I
+SELECT COUNT(*) FROM inventory AT (BRANCH => 'snapshot_v1');
+----
+3
+
+# Monitor not visible on branch
+query I
+SELECT COUNT(*) FROM inventory AT (BRANCH => 'snapshot_v1') WHERE name = 'Monitor';
+----
+0
+
+# ============================================================================
+# TEST 3: Create another branch - sees more data
+# ============================================================================
+
+statement ok
+SELECT * FROM ducklake_create_branch('test_catalog', 'snapshot_v2');
+
+# New branch sees 4 rows (includes Monitor)
+query I
+SELECT COUNT(*) FROM inventory AT (BRANCH => 'snapshot_v2');
+----
+4
+
+# Old branch still sees 3
+query I
+SELECT COUNT(*) FROM inventory AT (BRANCH => 'snapshot_v1');
+----
+3
+
+# ============================================================================
+# TEST 4: Update on main - branches don't see it
+# ============================================================================
+
+statement ok
+UPDATE inventory SET price = 899.99 WHERE product_id = 1;
+
+# Main has updated price
+query R
+SELECT price FROM inventory AT (BRANCH => 'main') WHERE product_id = 1;
+----
+899.99
+
+# Both branches have original price
+query R
+SELECT price FROM inventory AT (BRANCH => 'snapshot_v1') WHERE product_id = 1;
+----
+999.99
+
+query R
+SELECT price FROM inventory AT (BRANCH => 'snapshot_v2') WHERE product_id = 1;
+----
+999.99
+
+# ============================================================================
+# TEST 5: Delete on main - branches don't see it
+# ============================================================================
+
+statement ok
+DELETE FROM inventory WHERE product_id = 2;
+
+# Main has 3 rows (Monitor added, Mouse deleted)
+query I
+SELECT COUNT(*) FROM inventory AT (BRANCH => 'main');
+----
+3
+
+# snapshot_v1 still has 3 rows (original set)
+query I
+SELECT COUNT(*) FROM inventory AT (BRANCH => 'snapshot_v1');
+----
+3
+
+# snapshot_v2 still has 4 rows (includes Monitor, Mouse still exists)
+query I
+SELECT COUNT(*) FROM inventory AT (BRANCH => 'snapshot_v2');
+----
+4
+
+# Verify Mouse exists on branches but not main
+query I
+SELECT COUNT(*) FROM inventory AT (BRANCH => 'main') WHERE product_id = 2;
+----
+0
+
+query I
+SELECT COUNT(*) FROM inventory AT (BRANCH => 'snapshot_v1') WHERE product_id = 2;
+----
+1
+
+query I
+SELECT COUNT(*) FROM inventory AT (BRANCH => 'snapshot_v2') WHERE product_id = 2;
+----
+1
+
+# ============================================================================
+# TEST 6: Create branch from branch (nested)
+# ============================================================================
+
+statement ok
+SELECT * FROM ducklake_create_branch('test_catalog', 'snapshot_v2_child', 'snapshot_v2');
+
+# Child sees same as parent
+query I
+SELECT COUNT(*) FROM inventory AT (BRANCH => 'snapshot_v2_child');
+----
+4
+
+# ============================================================================
+# TEST 7: Cross-branch queries
+# ============================================================================
+
+# Compare products across branches
+query ITI
+SELECT 
+    (SELECT COUNT(*) FROM inventory AT (BRANCH => 'main')) as main_count,
+    (SELECT COUNT(*) FROM inventory AT (BRANCH => 'snapshot_v1')) as v1_count,
+    (SELECT COUNT(*) FROM inventory AT (BRANCH => 'snapshot_v2')) as v2_count;
+----
+3	3	4
+
+# Products in snapshot_v2 but not in main (Mouse was deleted from main)
+query IT
+SELECT product_id, name 
+FROM inventory AT (BRANCH => 'snapshot_v2')
+WHERE product_id NOT IN (SELECT product_id FROM inventory AT (BRANCH => 'main'))
+ORDER BY product_id;
+----
+2	Mouse
+
+# ============================================================================
+# CLEANUP
+# ============================================================================
+
+statement ok
+DROP TABLE inventory;
+
+statement ok
+DETACH test_catalog;

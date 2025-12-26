@@ -1,0 +1,167 @@
+-- ============================================
+-- DUCKLAKE BRANCHING COMPREHENSIVE TEST SUITE
+-- ============================================
+-- Run with:
+-- ./build/release/duckdb -unsigned < ducklake_branching_comprehensive_tests.sql
+-- ============================================
+
+-- Load the extension
+LOAD 'build/release/extension/ducklake/ducklake.duckdb_extension';
+
+-- ============================================
+-- SETUP: Create Fresh DuckLake Catalog
+-- ============================================
+ATTACH 'ducklake:test_branch.ducklake' AS test_lake;
+USE test_lake;
+
+
+
+
+
+-- ============================================================================
+-- TEST 1: Basic Branch Isolation for Data
+-- ============================================================================
+SELECT '=== TEST 1: Basic Branch Isolation for Data ===' as test_section;
+
+-- Create table and insert data on main branch
+CREATE TABLE test_lake.main.employees (id INT, name VARCHAR, department VARCHAR);
+INSER]11;?NCHING COMPREHENSIVE TEST SUITE
+-- ============================================
+-- Run with:
+-- ./build/release/duckdb -unsigned < ducklake_branching_comprehensive_tests.sql
+-- ============================================
+
+-- Load the extension
+LOAD 'build/release/extension/ducklake/ducklake.duckdb_extension';
+
+-- ============================================
+-- SETUP: Create Fresh DuckLake Catalog
+-- ============================================
+ATTACH 'ducklake:test_branch.ducklake' AS test_lake;
+USE test_lake;
+
+
+
+
+
+-- ============================================================================
+-- TEST 1: Basic Branch Isolation for Data
+-- ============================================================================
+SELECT '=== TEST 1: Basic Branch Isolation for Data ===' as test_section;
+
+-- Create table and insert data on main branch
+CREATE TABLE test_lake.main.employees (id INT, name VARCHAR, department VARCHAR);
+INSERT INTO test_lake.main.emploINSERT INTO test_lake.main.emploINSERDuckDB v1.5.0-dev3655 (Development Version, 5d5d04f418)
+[90mEnter ".help" for usage hints.
+[00m[6n[1m[38;5;208mmemory[00m D [0K[1m[38;5;208mmemory[00m D EHENSIVE TEST SUITE
+[32m       ‣ [00m[9C[0K[1A[0K[1m[38;5;208mmemory[00m D EHENSIVE TEST SUITE
+[90m       · [00m[90m-- ============================================
+[00m[32m       ‣ [00m[9C[0K[1A[0K[1A[0K[1m[38;5;208mmemory[00m D EHENSIVE TEST SUITE
+[90m       · [00m[90m-- ============================================
+[00m[90m       · [00m[90m-- Run with:
+[00m[32m       ‣ [00m[9C[0K[1A[0K[1A[0K[1A[0K[1m[38;5;208mmemory[00m D EHENSIVE TEST SUITE
+[90m       · [00m[90m-- ============================================
+[00m[90m       · [00m[90m-- Run with:
+[00m[90m       · [00m[90m-- ./build/release/duckdb -unsigned < ducklake_branching_comprehensive_tests.sql
+[00m[32m       ‣ [00m[9C[0K[1A[0K[1A[0K[1A[0K[1A[0K[1A[0K[1m[38;5;208mmemory[00m D EHENSIVE TEST SUITE
+[90m       · [00m[90m-- ============================================
+[00m[90m       · [00m[90m-- Run with:
+[00m[90m       · [00m[90m-- ./build/release/duckdb -unsigned < ducklake_branching_comprehensive_tests.sql
+[00m[90m       · [00m[90m-- ============================================
+[00m[32m       ‣ [00m[9C[0K[1A[0K[1A[0K[1A[0K[1A[0K[1A[0K[1A[0K[1m[38;5;208mmemory[00m D EHENSIVE TEST SUITE
+[90m       · [00m[90m-- ============================================
+[00m[90m       · [00m[90m-- Run with:
+[00m[90m       · [00m[90m-- ./build/release/duckdb -unsigned < ducklake_branching_comprehensive_tests.sql
+[00m[90m       · [00m[90m-- ============================================
+[00m[90m       · [00m[90m
+       ‣ [00m[9C[0K[1A[0K[1A[0K[1A[0K[1A[0K[1A[0K[1A[0K[1A[0K[1m[38;5;208mmemory[00m D EHENSIVE TEST SUITE
+[90m       · [00m[90m-- ============================================
+[00m[90m       · [00m[90m-- Run with:
+[00m[90m       · [00m[90m-- ./build/release/duckdb -unsigned < ducklake_branching_comprehensive_tests.sql
+[00m[90m       · [00m[90m-- ============================================
+[00m[90m       · [00m[90m
+[00m[90m       · [00m[90m-- Load the extension
+[00m[32m       ‣ [00m[9C[0K[1A[0K[1A[0K[1A[0K[1A[0K[1A[0K[1A[0K[1A[0K[1A[0K[1m[38;5;208mmemory[00m D EHENSIVE TEST SUITE
+[90m         [00m[90m-- ============================================
+[00m[90m         [00m[90m-- Run with:
+[00m[90m         [00m[90m-- ./build/release/duckdb -unsigned < ducklake_branching_comprehensive_tests.sql
+[00m[90m         [00m[90m-- ============================================
+[00m[90m         [00m[90m
+[00m[90m         [00m[90m-- Load the extension
+[00m[32m         [00m[32mLOAD [00m[33m'build/release/extension/ducklake/ducklake.duckdb_extension'[00m;[75C
+
+-- ============================================
+-- SETUP: Create Fresh DuckLake Catalog
+-- ============================================
+ATTACH 'ducklake:test_branch.ducklake' AS test_lake;
+USE test_lake;
+
+
+
+
+
+-- ============================================================================
+-- TEST 1: Basic Branch Isolation for Data
+-- ============================================================================
+SELECT '=== TEST 1: Basic Branch Isolation for Data ===' as test_section;
+
+-- Create table and insert data on main branch
+CREATE TABLE test_lake.main.employees (id INT, name VARCHAR, department VARCHAR);
+INSERT INTO test_lake.main.emploINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.em'SINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.em'SINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.em'SINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.em'SINSERT [1m[31mParser Error:
+[00msyntax error at or near "[33mEHENSIVE[00m"
+
+[1mLINE 1:[00m [1m[31mEHENSIVE [00mTEST SUITE[1m[31m
+        ^[00m
+[6n[1m[38;5;208mmemory[00m D [0K[1m[38;5;208mmemory[00m D =================
+[32m       ‣ [00m[9C[0K[1A[0K[1m[38;5;208mmemory[00m D =================
+[90m       · [00m[90m-- SETUP: Create Fresh DuckLake Catalog
+[00m[32m       ‣ [00m[9C[0K[1A[0K[1A[0K[1m[38;5;208mmemory[00m D =================
+[90m       · [00m[90m-- SETUP: Create Fresh DuckLake Catalog
+[00m[90m       · [00m[90m-- ============================================
+[00m[32m       ‣ [00m[9C[0K[1A[0K[1A[0K[1A[0K[1m[38;5;208mmemory[00m D =================
+[90m         [00m[90m-- SETUP: Create Fresh DuckLake Catalog
+[00m[90m         [00m[90m-- ============================================
+[00m[32m         [00m[32mATTACH [00m[33m'ducklake:test_branch.ducklake' [00m[32mAS [00mtest_lake;[61C
+USE test_lake;
+
+
+
+
+
+-- ============================================================================
+-- TEST 1: Basic Branch Isolation for Data
+-- ============================================================================
+SELECT '=== TEST 1: Basic Branch Isolation for Data ===' as test_section;
+
+-- Create table and insert data on main branch
+CREATE TABLE test_lake.main.employees (id INT, name VARCHAR, department VARCHAR);
+INSERT INTO test_lake.main.emploINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.em'SINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.em'SINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.em'SINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.em'SINSERT INTO test_lake.maibrINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.em'SINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.emploINSERT INTO test[1m[31mParser Error:
+[00msyntax error at or near "[33m=================[00m"
+
+[1mLINE 1:[00m [1m[31m=================[00m[1m[31m
+        ^[00m
+[6n[1m[38;5;208mmemory[00m D [0K[1m[38;5;208mmemory[00m D ====================================================================
+[32m       ‣ [00m[9C[0K[1A[0K[1m[38;5;208mmemory[00m D ====================================================================
+[90m       · [00m[90m-- TEST 1: Basic Branch Isolation for Data
+[00m[32m       ‣ [00m[9C[0K[1A[0K[1A[0K[1m[38;5;208mmemory[00m D ====================================================================
+[90m       · [00m[90m-- TEST 1: Basic Branch Isolation for Data
+[00m[90m       · [00m[90m-- ============================================================================
+[00m[32m       ‣ [00m[9C[0K[1A[0K[1A[0K[1A[0K[1A[0K[1m[38;5;208mmemory[00m D ====================================================================
+[90m         [00m[90m-- TEST 1: Basic Branch Isolation for Data
+[00m[90m         [00m[90m-- ============================================================================
+[00m[90m         [00m[90mSELECT '=== TEST 1: Basic Branch Isolation for Data ===' as test_section;[00m[2C
+
+-- Create table and insert data on main branch
+CREATE TABLE test_lake.main.employees (id INT, name VARCHAR, department VARCHAR);
+INSERT INTO test_lake.main.emploINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.em'SINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.em'SINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.em'SINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.em'SINSERT INTO test_lake.maibrINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.em'SINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.emecINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.em'SINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.em'SINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.em'SINSERT [1m[31mParser Error:
+[00moperator too long: operators longer than 64 bytes are not supported at or near "[33m====================================================================[00m"
+
+[1mLINE 1:[00m [1m[31m=======================================================[00m[32m..[00m.[1m[31m
+        ^[00m
+[6n[1m[38;5;208mmemory[00m D [0K[1m[38;5;208mmemory[00m D a [32mon [00mmain [32mbranch
+[00m[32m       ‣ [00m[9C[0K[1A[0K[1m[38;5;208mmemory[00m D a [32mon [00mmain [32mbranch
+[00m[90m         [00m[32mCREATE [00m[32mTABLE [00mtest_lake.main.employees (id [32mINT[00m, [32mname [00m[32mVARCHAR[00m, department [32mVARCHAR[00m);[10C
+INSERT INTO test_lake.main.emploINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.em'SINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.em'SINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.em'SINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.em'SINSERT INTO test_lake.maibrINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.em'SINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.emecINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.em'SINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.em'SINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.em'SINSERT INTaiINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.emploINSERT INTO test_lake.main.em'SINSERT INTO test_lake.main.emploI[1m[31mParser Error:
+[00msyntax error at or near "[33ma[00m"
+
+[1mLINE 1:[00m [1m[31ma [00

@@ -1,0 +1,187 @@
+# name: test/sql/branching/test_branch_time_travel.test
+# description: Test combining time travel (version queries) with branches
+# group: [branching]
+# NOTE: Branches are read-only snapshots at specific points in time.
+
+require ducklake
+
+# Create test catalog
+statement ok
+ATTACH 'ducklake:metadata=sqlite:__TEST_DIR__/tt_branch_test.db data=__TEST_DIR__/tt_branch_data' AS tt_catalog;
+
+statement ok
+USE tt_catalog;
+
+# ============================================================================
+# SETUP: Create data with multiple versions and branches
+# ============================================================================
+
+statement ok
+CREATE TABLE documents (
+    id BIGINT,
+    title VARCHAR,
+    content VARCHAR
+);
+
+# Version 1: Create table (empty)
+# Version 2: Initial insert
+statement ok
+INSERT INTO documents VALUES (1, 'Doc A', 'Version 1 of A');
+
+# Create branch at this point (1 document)
+statement ok
+SELECT * FROM ducklake_create_branch('tt_catalog', 'v1_snapshot');
+
+# Version 3: Another insert
+statement ok
+INSERT INTO documents VALUES (2, 'Doc B', 'Version 1 of B');
+
+# Create branch at this point (2 documents)
+statement ok
+SELECT * FROM ducklake_create_branch('tt_catalog', 'v2_snapshot');
+
+# Version 4: Update on main
+statement ok
+UPDATE documents SET content = 'Version 2 of A' WHERE id = 1;
+
+# Version 5: Insert on main
+statement ok
+INSERT INTO documents VALUES (3, 'Doc C', 'New on main');
+
+# ============================================================================
+# TEST 1: Query main at specific versions
+# ============================================================================
+
+# At version 1 (after CREATE TABLE, before data)
+query I
+SELECT COUNT(*) FROM documents AT (VERSION => 1);
+----
+0
+
+# At version 2 (after first insert)
+query I
+SELECT COUNT(*) FROM documents AT (VERSION => 2);
+----
+1
+
+# At version 3 (after second insert)
+query I
+SELECT COUNT(*) FROM documents AT (VERSION => 3);
+----
+2
+
+# Current main
+query I
+SELECT COUNT(*) FROM documents AT (BRANCH => 'main');
+----
+3
+
+# ============================================================================
+# TEST 2: Query branches - they see data at fork point
+# ============================================================================
+
+# v1_snapshot: forked after version 2 (1 doc)
+query I
+SELECT COUNT(*) FROM documents AT (BRANCH => 'v1_snapshot');
+----
+1
+
+query T
+SELECT title FROM documents AT (BRANCH => 'v1_snapshot') ORDER BY id;
+----
+Doc A
+
+# v2_snapshot: forked after version 3 (2 docs)
+query I
+SELECT COUNT(*) FROM documents AT (BRANCH => 'v2_snapshot');
+----
+2
+
+query T
+SELECT title FROM documents AT (BRANCH => 'v2_snapshot') ORDER BY id;
+----
+Doc A
+Doc B
+
+# ============================================================================
+# TEST 3: Content differs between main and branches
+# ============================================================================
+
+# Main has updated content for Doc A
+query T
+SELECT content FROM documents AT (BRANCH => 'main') WHERE id = 1;
+----
+Version 2 of A
+
+# Branches have original content
+query T
+SELECT content FROM documents AT (BRANCH => 'v1_snapshot') WHERE id = 1;
+----
+Version 1 of A
+
+query T
+SELECT content FROM documents AT (BRANCH => 'v2_snapshot') WHERE id = 1;
+----
+Version 1 of A
+
+# ============================================================================
+# TEST 4: Doc C only exists on main
+# ============================================================================
+
+query I
+SELECT COUNT(*) FROM documents AT (BRANCH => 'main') WHERE id = 3;
+----
+1
+
+query I
+SELECT COUNT(*) FROM documents AT (BRANCH => 'v1_snapshot') WHERE id = 3;
+----
+0
+
+query I
+SELECT COUNT(*) FROM documents AT (BRANCH => 'v2_snapshot') WHERE id = 3;
+----
+0
+
+# ============================================================================
+# TEST 5: Create branch from branch
+# ============================================================================
+
+statement ok
+SELECT * FROM ducklake_create_branch('tt_catalog', 'v2_child', 'v2_snapshot');
+
+# v2_child sees same as v2_snapshot
+query I
+SELECT COUNT(*) FROM documents AT (BRANCH => 'v2_child');
+----
+2
+
+# Verify content matches parent
+query TT
+SELECT title, content FROM documents AT (BRANCH => 'v2_child') ORDER BY id;
+----
+Doc A	Version 1 of A
+Doc B	Version 1 of B
+
+# ============================================================================
+# TEST 6: Compare all branches
+# ============================================================================
+
+query IIII
+SELECT 
+    (SELECT COUNT(*) FROM documents AT (BRANCH => 'main')) as main_count,
+    (SELECT COUNT(*) FROM documents AT (BRANCH => 'v1_snapshot')) as v1_count,
+    (SELECT COUNT(*) FROM documents AT (BRANCH => 'v2_snapshot')) as v2_count,
+    (SELECT COUNT(*) FROM documents AT (BRANCH => 'v2_child')) as v2_child_count;
+----
+3	1	2	2
+
+# ============================================================================
+# CLEANUP
+# ============================================================================
+
+statement ok
+DROP TABLE documents;
+
+statement ok
+DETACH tt_catalog;

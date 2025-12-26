@@ -1,0 +1,171 @@
+# name: test/sql/branch_write_operations.test
+# description: Test write operations on specific branches using ducklake_use_branch
+# group: [branching]
+
+require ducklake
+
+# Setup: Create DuckLake and initial data
+statement ok
+ATTACH ':memory:' AS meta_db;
+
+statement ok
+ATTACH 'ducklake:meta_db.ducklake_meta' AS lake;
+
+statement ok
+USE lake;
+
+statement ok
+CREATE TABLE products (id INT, name VARCHAR, price DECIMAL(10,2));
+
+statement ok
+INSERT INTO products VALUES (1, 'Widget', 9.99), (2, 'Gadget', 19.99), (3, 'Gizmo', 29.99);
+
+# Verify initial data on main
+query III
+SELECT * FROM products ORDER BY id;
+----
+1	Widget	9.99
+2	Gadget	19.99
+3	Gizmo	29.99
+
+# Create a development branch
+query III
+SELECT * FROM ducklake_create_branch('lake', 'dev');
+----
+1	dev	1
+
+# Verify we start on main branch
+query IIII
+SELECT * FROM ducklake_current_branch('lake');
+----
+lake	main	0	1
+
+# Switch to the dev branch for writes
+query IIII
+SELECT * FROM ducklake_use_branch('lake', 'dev');
+----
+lake	dev	1	1
+
+# Verify we're now on dev branch
+query IIII
+SELECT * FROM ducklake_current_branch('lake');
+----
+lake	dev	1	1
+
+# Insert data while on dev branch - this should go to dev branch
+statement ok
+INSERT INTO products VALUES (4, 'DevWidget', 39.99);
+
+# Verify the data was inserted
+query III
+SELECT * FROM products ORDER BY id;
+----
+1	Widget	9.99
+2	Gadget	19.99
+3	Gizmo	29.99
+4	DevWidget	39.99
+
+# Check that dev branch head has been updated
+query III
+SELECT branch_name, branch_id, head_snapshot_id FROM ducklake_branches('lake') WHERE branch_name = 'dev';
+----
+dev	1	2
+
+# Switch back to main branch
+query IIII
+SELECT * FROM ducklake_use_branch('lake', 'main');
+----
+lake	main	0	1
+
+# Verify main branch still has original data (dev changes shouldn't appear)
+# Note: This requires branch-aware reads to work correctly
+# For now, without full branch-aware reads, this may show all data
+query III
+SELECT * FROM products ORDER BY id;
+----
+1	Widget	9.99
+2	Gadget	19.99
+3	Gizmo	29.99
+
+# Insert data while on main branch
+statement ok
+INSERT INTO products VALUES (5, 'MainWidget', 49.99);
+
+# Verify main branch data
+query III
+SELECT * FROM products ORDER BY id;
+----
+1	Widget	9.99
+2	Gadget	19.99
+3	Gizmo	29.99
+5	MainWidget	49.99
+
+# Check that main branch head has been updated
+query III
+SELECT branch_name, branch_id, head_snapshot_id FROM ducklake_branches('lake') WHERE branch_name = 'main';
+----
+main	0	3
+
+# Now switch to dev and verify it has its changes but not main's new changes
+query IIII
+SELECT * FROM ducklake_use_branch('lake', 'dev');
+----
+lake	dev	1	2
+
+# Read using AT BRANCH syntax to see dev's view
+query III
+SELECT * FROM products AT (BRANCH => 'dev') ORDER BY id;
+----
+1	Widget	9.99
+2	Gadget	19.99
+3	Gizmo	29.99
+4	DevWidget	39.99
+
+# Read main's view
+query III
+SELECT * FROM products AT (BRANCH => 'main') ORDER BY id;
+----
+1	Widget	9.99
+2	Gadget	19.99
+3	Gizmo	29.99
+5	MainWidget	49.99
+
+# Test creating a branch from dev and writing to it
+statement ok
+SELECT * FROM ducklake_create_branch('lake', 'feature', 'dev');
+
+query IIII
+SELECT * FROM ducklake_use_branch('lake', 'feature');
+----
+lake	feature	2	2
+
+statement ok
+INSERT INTO products VALUES (6, 'FeatureWidget', 59.99);
+
+# Feature branch should see dev's data plus its own
+query III
+SELECT * FROM products AT (BRANCH => 'feature') ORDER BY id;
+----
+1	Widget	9.99
+2	Gadget	19.99
+3	Gizmo	29.99
+4	DevWidget	39.99
+6	FeatureWidget	59.99
+
+# Dev should not see feature's data
+query III
+SELECT * FROM products AT (BRANCH => 'dev') ORDER BY id;
+----
+1	Widget	9.99
+2	Gadget	19.99
+3	Gizmo	29.99
+4	DevWidget	39.99
+
+# Main should not see dev's or feature's data
+query III
+SELECT * FROM products AT (BRANCH => 'main') ORDER BY id;
+----
+1	Widget	9.99
+2	Gadget	19.99
+3	Gizmo	29.99
+5	MainWidget	49.99

@@ -1,8 +1,12 @@
 #include "common/ducklake_types.hpp"
+#include "common/ducklake_branch_ref.hpp"
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_scan.hpp"
 #include "storage/ducklake_transaction.hpp"
+#include "storage/ducklake_branch_manager.hpp"
+#include "storage/ducklake_metadata_manager.hpp"
+#include "duckdb/common/string_util.hpp"
 
 #include "duckdb/storage/statistics/base_statistics.hpp"
 #include "duckdb/storage/table_storage_info.hpp"
@@ -225,9 +229,98 @@ TableFunction DuckLakeTableEntry::GetScanFunction(ClientContext &context, unique
                                                   const EntryLookupInfo &lookup_info) {
 	auto function = DuckLakeFunctions::GetDuckLakeScanFunction(*context.db);
 	auto &transaction = DuckLakeTransaction::Get(context, ParentCatalog());
-	auto function_info =
-	    make_shared_ptr<DuckLakeFunctionInfo>(*this, transaction, transaction.GetSnapshot(lookup_info.GetAtClause()));
+
+	// Determine the snapshot to use
+	DuckLakeSnapshot snapshot;
+	BranchIndex branch_id;
+	string branch_name;
+
+	// Check for branch context from @ syntax (e.g., table@branch)
+	if (transaction.HasBranchContext()) {
+		auto &branch_ref = transaction.GetBranchContext();
+		auto &metadata_manager = transaction.GetMetadataManager();
+
+		// Resolve branch name to branch info
+		if (branch_ref.HasBranch()) {
+			auto &branch_manager = metadata_manager.GetBranchManager();
+			auto branch_info = branch_manager.GetBranchByName(transaction, branch_ref.branch_name);
+			branch_id = branch_info.branch_id;
+			branch_name = branch_info.branch_name;
+
+			if (branch_ref.HasVersion()) {
+				// Use specific version within branch
+				snapshot = DuckLakeSnapshot(branch_ref.version.GetIndex(), 0, 0, 0);
+			} else {
+				// Use branch head
+				snapshot = DuckLakeSnapshot(branch_info.head_snapshot_id, 0, 0, 0);
+			}
+		} else if (branch_ref.HasVersion()) {
+			// Version on main branch
+			snapshot = DuckLakeSnapshot(branch_ref.version.GetIndex(), 0, 0, 0);
+			branch_name = "main";
+		}
+
+		// Clear branch context after use
+		transaction.ClearBranchContext();
+	} else if (lookup_info.GetAtClause()) {
+		// Use AT clause if specified
+		auto &at_clause = *lookup_info.GetAtClause();
+		auto &unit = at_clause.Unit();
+
+		// DEBUG: Log AT clause details
+		fprintf(stderr, "[DEBUG] AT clause detected - unit: '%s', value type: %s, value: %s\n",
+		        unit.c_str(),
+		        at_clause.GetValue().type().ToString().c_str(),
+		        at_clause.GetValue().ToString().c_str());
+		fflush(stderr);
+
+		if (StringUtil::CIEquals(unit, "branch")) {
+			fprintf(stderr, "[DEBUG] Matched BRANCH unit\n");
+			fflush(stderr);
+			// Handle BRANCH unit in AT clause
+			auto &metadata_manager = transaction.GetMetadataManager();
+			auto &branch_manager = metadata_manager.GetBranchManager();
+
+			// Parse branch name (and optional version) from AT clause value
+			auto branch_str = at_clause.GetValue().DefaultCastAs(LogicalType::VARCHAR).GetValue<string>();
+			string parsed_branch_name;
+			optional_idx version_override;
+
+			auto colon_pos = branch_str.find(':');
+			if (colon_pos != string::npos) {
+				parsed_branch_name = branch_str.substr(0, colon_pos);
+				version_override = StringUtil::ToUnsigned(branch_str.substr(colon_pos + 1));
+			} else {
+				parsed_branch_name = branch_str;
+			}
+
+			auto branch_info = branch_manager.GetBranchByName(transaction, parsed_branch_name);
+			branch_id = branch_info.branch_id;
+			branch_name = branch_info.branch_name;
+
+			idx_t snapshot_id;
+			if (version_override.IsValid()) {
+				snapshot_id = version_override.GetIndex();
+			} else {
+				snapshot_id = branch_info.head_snapshot_id;
+			}
+			snapshot = DuckLakeSnapshot(snapshot_id, 0, 0, 0);
+		} else {
+			// VERSION or TIMESTAMP - use main branch
+			fprintf(stderr, "[DEBUG] Falling through to VERSION/TIMESTAMP handler for unit: '%s'\n", unit.c_str());
+			snapshot = transaction.GetSnapshot(lookup_info.GetAtClause());
+			branch_name = "main";
+		}
+	} else {
+		// Use current snapshot
+		snapshot = transaction.GetSnapshot();
+		branch_name = "main";
+	}
+
+	auto function_info = make_shared_ptr<DuckLakeFunctionInfo>(*this, transaction, snapshot);
 	function_info->table_name = name;
+	function_info->branch_id = branch_id;
+	function_info->branch_name = branch_name;
 	for (auto &col : columns.Logical()) {
 		function_info->column_names.push_back(col.Name());
 		function_info->column_types.push_back(col.Type());

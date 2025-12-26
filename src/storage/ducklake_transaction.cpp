@@ -11,6 +11,7 @@
 #include "duckdb/main/client_data.hpp"
 #include "duckdb/main/database_manager.hpp"
 #include "duckdb/planner/tableref/bound_at_clause.hpp"
+#include "storage/ducklake_branch_manager.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_macro_entry.hpp"
 #include "storage/ducklake_schema_entry.hpp"
@@ -1312,6 +1313,7 @@ DuckLakeTransaction::GetNewDeleteFiles(const DuckLakeCommitState &commit_state,
 			delete_file.id = DataFileIndex(commit_state.commit_snapshot.next_file_id++);
 			delete_file.table_id = table_id;
 			delete_file.data_file_id = file.data_file_id;
+			delete_file.data_file_branch_id = file.data_file_branch_id;  // Copy the branch that owns the data file
 			delete_file.path = file.file_name;
 			delete_file.delete_count = file.delete_count;
 			delete_file.file_size_bytes = file.file_size_bytes;
@@ -1603,6 +1605,12 @@ void DuckLakeTransaction::FlushChanges() {
 		// read-only transactions don't need to do anything
 		return;
 	}
+	
+	// DEBUG: Log FlushChanges entry
+	fprintf(stderr, "[DEBUG FlushChanges] Starting FlushChanges, working_branch: %llu\n",
+	        static_cast<unsigned long long>(ducklake_catalog.GetWorkingBranch().index));
+	fflush(stderr);
+	
 	idx_t max_retry_count = 10;
 	idx_t retry_wait_ms = 100;
 	double retry_backoff = 1.5;
@@ -1619,10 +1627,24 @@ void DuckLakeTransaction::FlushChanges() {
 	}
 
 	auto transaction_snapshot = GetSnapshot();
+	
+	// DEBUG: Log transaction snapshot
+	fprintf(stderr, "[DEBUG FlushChanges] transaction_snapshot: branch_id=%llu, snapshot_id=%llu\n",
+	        static_cast<unsigned long long>(transaction_snapshot.branch_id.index),
+	        static_cast<unsigned long long>(transaction_snapshot.snapshot_id));
+	fflush(stderr);
+	
 	auto transaction_changes = GetTransactionChanges();
 	DuckLakeSnapshot commit_snapshot;
 	for (idx_t i = 0; i < max_retry_count + 1; i++) {
 		commit_snapshot = GetSnapshot();
+		
+		// DEBUG: Log commit snapshot before increment
+		fprintf(stderr, "[DEBUG FlushChanges] commit_snapshot BEFORE increment: branch_id=%llu, snapshot_id=%llu\n",
+		        static_cast<unsigned long long>(commit_snapshot.branch_id.index),
+		        static_cast<unsigned long long>(commit_snapshot.snapshot_id));
+		fflush(stderr);
+		
 		commit_snapshot.snapshot_id++;
 		if (SchemaChangesMade()) {
 			// we changed the schema - need to get a new schema version
@@ -1641,7 +1663,25 @@ void DuckLakeTransaction::FlushChanges() {
 			CommitChanges(commit_state, transaction_changes);
 
 			// write the new snapshot
+			// DEBUG: Log before InsertSnapshot
+			fprintf(stderr, "[DEBUG FlushChanges] BEFORE InsertSnapshot: branch_id=%llu, snapshot_id=%llu\n",
+			        static_cast<unsigned long long>(commit_snapshot.branch_id.index),
+			        static_cast<unsigned long long>(commit_snapshot.snapshot_id));
+			fflush(stderr);
+			
 			metadata_manager->InsertSnapshot(commit_snapshot);
+			
+			// DEBUG: Log after InsertSnapshot
+			fprintf(stderr, "[DEBUG FlushChanges] AFTER InsertSnapshot: branch_id=%llu, snapshot_id=%llu\n",
+			        static_cast<unsigned long long>(commit_snapshot.branch_id.index),
+			        static_cast<unsigned long long>(commit_snapshot.snapshot_id));
+			fflush(stderr);
+
+			// Update the current branch's head_snapshot_id to point to the new snapshot
+			// This is critical for BRANCH AT clause to work correctly
+			auto &branch_manager = metadata_manager->GetBranchManager();
+			BranchIndex current_branch = ducklake_catalog.GetWorkingBranch();
+			branch_manager.UpdateBranchHead(*this, current_branch, commit_snapshot.snapshot_id);
 
 			WriteSnapshotChanges(commit_state, transaction_changes);
 			if (SchemaChangesMade()) {
@@ -1650,6 +1690,13 @@ void DuckLakeTransaction::FlushChanges() {
 			}
 			connection->Commit();
 			catalog_version = commit_snapshot.schema_version;
+
+			// CRITICAL: Invalidate the cached snapshot so subsequent queries 
+			// in the same session see the newly committed data
+			{
+				lock_guard<mutex> guard(snapshot_lock);
+				snapshot.reset();
+			}
 
 			// finished writing
 			break;
@@ -1733,10 +1780,13 @@ unique_ptr<QueryResult> DuckLakeTransaction::Query(string query) {
 	query = StringUtil::Replace(query, "{METADATA_SCHEMA_ESCAPED}", schema_identifier_escaped);
 	query = StringUtil::Replace(query, "{METADATA_PATH}", metadata_path);
 	query = StringUtil::Replace(query, "{DATA_PATH}", data_path);
+	// Replace {BRANCH_ID} with the current working branch - needed for queries that don't have a snapshot context
+	query = StringUtil::Replace(query, "{BRANCH_ID}", to_string(ducklake_catalog.GetWorkingBranch().index));
 	return connection.Query(query);
 }
 
 unique_ptr<QueryResult> DuckLakeTransaction::Query(DuckLakeSnapshot snapshot, string query) {
+	query = StringUtil::Replace(query, "{BRANCH_ID}", to_string(snapshot.branch_id.index));
 	query = StringUtil::Replace(query, "{SNAPSHOT_ID}", to_string(snapshot.snapshot_id));
 	query = StringUtil::Replace(query, "{SCHEMA_VERSION}", to_string(snapshot.schema_version));
 	query = StringUtil::Replace(query, "{NEXT_CATALOG_ID}", to_string(snapshot.next_catalog_id));
@@ -1774,6 +1824,13 @@ DuckLakeSnapshot DuckLakeTransaction::GetSnapshot(optional_ptr<BoundAtClause> at
 		// no AT-clause - get the latest snapshot
 		return GetSnapshot();
 	}
+
+	// DEBUG: Log AT clause info in GetSnapshot
+	fprintf(stderr, "[DEBUG DuckLakeTransaction::GetSnapshot] AT clause - Unit: '%s', Value type: %s, Value: %s\n",
+	        at_clause->Unit().c_str(), at_clause->GetValue().type().ToString().c_str(),
+	        at_clause->GetValue().ToString().c_str());
+	fflush(stderr);
+
 	// construct a struct value from the AT clause in the form of {"unit": value} (e.g. {"version": 2}
 	// this is used as a caching key for the snapshot
 	child_list_t<Value> values;
@@ -1784,10 +1841,17 @@ DuckLakeSnapshot DuckLakeTransaction::GetSnapshot(optional_ptr<BoundAtClause> at
 	auto entry = snapshot_cache.find(snapshot_value);
 	if (entry != snapshot_cache.end()) {
 		// we already found this snapshot - return it
+		fprintf(stderr, "[DEBUG DuckLakeTransaction::GetSnapshot] Found cached snapshot\n");
+		fflush(stderr);
 		return entry->second;
 	}
 	// find the snapshot and cache it
+	fprintf(stderr, "[DEBUG DuckLakeTransaction::GetSnapshot] Calling metadata_manager->GetSnapshot\n");
+	fflush(stderr);
 	auto result_snapshot = *metadata_manager->GetSnapshot(*at_clause, bound);
+	fprintf(stderr, "[DEBUG DuckLakeTransaction::GetSnapshot] Got result_snapshot, snapshot_id: %llu\n",
+	        static_cast<unsigned long long>(result_snapshot.snapshot_id));
+	fflush(stderr);
 	snapshot_cache.insert(make_pair(std::move(snapshot_value), result_snapshot));
 	return result_snapshot;
 }
@@ -2420,6 +2484,22 @@ idx_t DuckLakeTransaction::GetCatalogVersion() {
 		return catalog_version;
 	}
 	return GetSnapshot().schema_version;
+}
+
+void DuckLakeTransaction::SetBranchContext(const DuckLakeBranchRef &branch_ref) {
+	branch_context = branch_ref;
+}
+
+const DuckLakeBranchRef &DuckLakeTransaction::GetBranchContext() const {
+	return branch_context;
+}
+
+bool DuckLakeTransaction::HasBranchContext() const {
+	return branch_context.HasBranch() || branch_context.HasVersion();
+}
+
+void DuckLakeTransaction::ClearBranchContext() {
+	branch_context = DuckLakeBranchRef();
 }
 
 } // namespace duckdb
