@@ -283,75 +283,85 @@ SELECT 'Main Engineering budget unchanged' as test, budget as result, 1000000.00
 FROM test_lake.main.departments WHERE name = 'Engineering';
 
 
-SELECT 'DEBUG: Data files for departments on budget_branch:' as info;
-SELECT df.branch_id, df.data_file_id, df.table_id, df.begin_snapshot, df.end_snapshot, df.record_count
-FROM "__ducklake_metadata_test_lake".main.ducklake_data_file df
-WHERE df.table_id = (SELECT table_id FROM "__ducklake_metadata_test_lake".main.ducklake_table WHERE table_name = 'departments' LIMIT 1)
-ORDER BY df.branch_id, df.data_file_id;
-
-SELECT 'DEBUG: Delete files for departments:' as info;
-SELECT del.branch_id, del.delete_file_id, del.table_id, del.data_file_id, del.data_file_branch_id, del.begin_snapshot, del.delete_count
-FROM "__ducklake_metadata_test_lake".main.ducklake_delete_file del
-WHERE del.table_id = (SELECT table_id FROM "__ducklake_metadata_test_lake".main.ducklake_table WHERE table_name = 'departments' LIMIT 1)
-ORDER BY del.branch_id, del.delete_file_id;
-
-SELECT 'DEBUG: All departments data:' as info;
-SELECT * FROM test_lake.main.departments ORDER BY id;
 
 
-SELECT branch_id, table_id, table_name, begin_snapshot, end_snapshot
-FROM "__ducklake_metadata_test_lake".main.ducklake_table
-ORDER BY table_id, branch_id;
+-- Check what files exist for departments
+SELECT 'Data files:' as info;
+SELECT branch_id, data_file_id, begin_snapshot, end_snapshot, record_count, path
+FROM "__ducklake_metadata_test_lake".main.ducklake_data_file 
+ORDER BY branch_id, data_file_id;
 
-SELECT * FROM "__ducklake_metadata_test_lake".main.ducklake_branch_lineage 
-WHERE branch_id = 5
-ORDER BY ancestor_branch_id;
+SELECT 'Delete files:' as info;
+SELECT branch_id, delete_file_id, begin_snapshot, end_snapshot, data_file_id, data_file_branch_id
+FROM "__ducklake_metadata_test_lake".main.ducklake_delete_file;
 
+SELECT 'Branch lineage for budget_branch (branch_id=5):' as info;
+SELECT * FROM "__ducklake_metadata_test_lake".main.ducklake_branch_lineage WHERE branch_id = 5;
 
-SELECT * FROM "__ducklake_metadata_test_lake".main.ducklake_branch_lineage 
-ORDER BY branch_id, ancestor_branch_id;
-
-
--- Simulate GetFilesForTable for budget_branch (branch_id=5) at snapshot_id=7
--- for departments table (table_id=2)
-SELECT data.branch_id, data.data_file_id, data.table_id, data.begin_snapshot, data.end_snapshot, data.record_count
-FROM "__ducklake_metadata_test_lake".main.ducklake_data_file data
-JOIN "__ducklake_metadata_test_lake".main.ducklake_branch_lineage bl 
-  ON data.branch_id = bl.ancestor_branch_id
-WHERE bl.branch_id = 5
-  AND data.table_id = 2
-  AND CASE WHEN data.branch_id = 5 THEN 7 ELSE bl.max_visible_snapshot END >= data.begin_snapshot
-  AND (data.end_snapshot IS NULL OR CASE WHEN data.branch_id = 5 THEN 7 ELSE bl.max_visible_snapshot END < data.end_snapshot)
-  AND NOT EXISTS (
-      SELECT 1 FROM "__ducklake_metadata_test_lake".main.ducklake_branch_file_deletion bfd
-      WHERE bfd.branch_id = 5
-        AND bfd.ancestor_branch_id = data.branch_id
-        AND bfd.data_file_id = data.data_file_id
-        AND bfd.deleted_at_snapshot <= 7
-  )
-ORDER BY data.branch_id, data.data_file_id;
+SELECT 'Current branch info:' as info;
+SELECT * FROM "__ducklake_metadata_test_lake".main.ducklake_branch;
 
 
--- Check what's in each data file for departments
-SELECT 'File 2 (main original): @@@@@' as info;
+SELECT branch_id, table_id, table_name, begin_snapshot 
+FROM "__ducklake_metadata_test_lake".main.ducklake_table 
+WHERE table_name = 'departments'
+ORDER BY branch_id, table_id;
 
-CALL ducklake_use_branch('test_lake', 'budget_branch');
-SELECT * FROM ducklake_list_files('test_lake', 'main', 'departments');
-
-SELECT * FROM test_lake.main.departments;
-
-
--- Or check the actual file paths
-SELECT branch_id, data_file_id, path, record_count 
+SELECT branch_id, data_file_id, table_id, begin_snapshot, record_count, path
 FROM "__ducklake_metadata_test_lake".main.ducklake_data_file 
 WHERE table_id = 2
 ORDER BY branch_id, data_file_id;
 
-SELECT del.*, df.path as data_file_path
-FROM "__ducklake_metadata_test_lake".main.ducklake_delete_file del
-LEFT JOIN "__ducklake_metadata_test_lake".main.ducklake_data_file df 
-  ON del.data_file_id = df.data_file_id AND del.data_file_branch_id = df.branch_id
-WHERE del.table_id = 2;
+
+-- Check delete file details
+SELECT * FROM "__ducklake_metadata_test_lake".main.ducklake_delete_file WHERE branch_id = 5;
+
+-- Check what's actually in the delete parquet file
+SELECT 'Checking delete file path:' as info;
+SELECT path FROM "__ducklake_metadata_test_lake".main.ducklake_delete_file WHERE branch_id = 5;
+
+SELECT 'First make sure we are on budget_branch' as info;
+
+-- First make sure we're on budget_branch
+CALL ducklake_use_branch('test_lake', 'budget_branch');
+SELECT * FROM ducklake_current_branch('test_lake');
+
+-- Now query ALL departments data
+SELECT * FROM test_lake.main.departments ORDER BY id;
+
+-- And specifically the Engineering row
+SELECT * FROM test_lake.main.departments WHERE name = 'Engineering';
+
+
+
+
+SELECT 'Disable filter pushdown and see if it works START @@@ ' as info;
+
+-- Disable filter pushdown and see if it works
+CALL ducklake_use_branch('test_lake', 'budget_branch');
+--SET disabled_optimizers = 'filter_pushdown';
+SELECT * FROM test_lake.main.departments WHERE name = 'Engineering';
+
+SELECT 'Disable filter pushdown and see if it works END !!! ' as info;
+
+-- After running comprehensive test, check the file stats
+SELECT 'File column stats:' as info;
+SELECT branch_id, data_file_id, column_id, min_value, max_value 
+FROM "__ducklake_metadata_test_lake".main.ducklake_file_column_stats
+WHERE table_id = 2
+ORDER BY branch_id, data_file_id, column_id;
+
+-- Check data files for table 2
+SELECT 'Data files:' as info;
+SELECT branch_id, data_file_id, begin_snapshot, record_count
+FROM "__ducklake_metadata_test_lake".main.ducklake_data_file
+WHERE table_id = 2
+ORDER BY branch_id, data_file_id;
+
+-- Check branch lineage for branch 5
+SELECT 'Branch 5 lineage:' as info;
+SELECT * FROM "__ducklake_metadata_test_lake".main.ducklake_branch_lineage WHERE branch_id = 5;
+
 
 
 

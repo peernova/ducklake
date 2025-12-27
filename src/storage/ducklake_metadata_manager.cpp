@@ -616,12 +616,24 @@ ORDER BY part.table_id, part.partition_id, part_col.partition_key_index
 vector<DuckLakeGlobalStatsInfo> DuckLakeMetadataManager::GetGlobalTableStats(DuckLakeSnapshot snapshot) {
 	// query the most recent stats with branch filtering
 	auto result = transaction.Query(snapshot, R"(
-SELECT table_id, column_id, record_count, next_row_id, file_size_bytes, contains_null, contains_nan, min_value, max_value, extra_stats
-FROM {METADATA_CATALOG}.ducklake_table_stats
-LEFT JOIN {METADATA_CATALOG}.ducklake_table_column_stats USING (table_id, branch_id)
-WHERE ducklake_table_stats.branch_id = {BRANCH_ID}
-  AND record_count IS NOT NULL AND file_size_bytes IS NOT NULL
-ORDER BY table_id;
+SELECT
+    ts.table_id,
+    tcs.column_id,
+    SUM(ts.record_count) as record_count,
+    MAX(ts.next_row_id) as next_row_id,
+    SUM(ts.file_size_bytes) as file_size_bytes,
+    BOOL_OR(tcs.contains_null) as contains_null,
+    BOOL_OR(tcs.contains_nan) as contains_nan,
+    MIN(tcs.min_value) as min_value,
+    MAX(tcs.max_value) as max_value,
+    NULL as extra_stats
+FROM {METADATA_CATALOG}.ducklake_table_stats ts
+JOIN {METADATA_CATALOG}.ducklake_branch_lineage bl ON ts.branch_id = bl.ancestor_branch_id
+LEFT JOIN {METADATA_CATALOG}.ducklake_table_column_stats tcs ON ts.table_id = tcs.table_id AND ts.branch_id = tcs.branch_id
+WHERE bl.branch_id = {BRANCH_ID}
+  AND ts.record_count IS NOT NULL AND ts.file_size_bytes IS NOT NULL
+GROUP BY ts.table_id, tcs.column_id
+ORDER BY ts.table_id
 )");
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to get global stats information from DuckLake: ");
@@ -1092,7 +1104,8 @@ FilterSQLResult DuckLakeMetadataManager::ConvertFilterPushdownToSQL(const Filter
 		if (!conditions.empty()) {
 			conditions += " AND ";
 		}
-		conditions += StringUtil::Format("data_file_id IN (SELECT data_file_id FROM %s WHERE %s(%s))", cte_name,
+
+		conditions += StringUtil::Format("(data.branch_id, data.data_file_id) IN (SELECT branch_id, data_file_id FROM %s WHERE %s(%s))", cte_name,
 		                                 null_checks.c_str(), filter_condition.c_str());
 
 		CTERequirement req(column_filter.column_field_index, referenced_stats);
@@ -1121,7 +1134,7 @@ DuckLakeMetadataManager::GenerateCTESectionFromRequirements(const unordered_map<
 		}
 		first_cte = false;
 
-		string select_list = "data_file_id";
+		string select_list = "branch_id, data_file_id";
 		for (const auto &stat : req.referenced_stats) {
 			select_list += ", " + stat;
 		}
@@ -1158,9 +1171,11 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLake
                                                                         DuckLakeSnapshot snapshot,
                                                                         const FilterPushdownInfo *filter_info) {
 	auto table_id = table.GetTableId();
-	string select_list = GetFileSelectList("data") +
-	                     ", data.row_id_start, data.begin_snapshot, data.partial_file_info, data.mapping_id, " +
-	                     GetFileSelectList("del");
+
+	string select_list = "data.branch_id, " + GetFileSelectList("data") +
+                     ", data.row_id_start, data.begin_snapshot, data.partial_file_info, data.mapping_id, " +
+                     GetFileSelectList("del");
+	
 
 	string query;
 	string where_clause;
@@ -1206,6 +1221,10 @@ WHERE bl.branch_id = {BRANCH_ID}
 	if (!where_clause.empty()) {
 		query += "\nAND " + where_clause;
 	}
+
+	fprintf(stderr, "[DEBUG GetFilesForTable] Query:\n%s\n", query.c_str());
+	fflush(stderr);
+
 	auto result = transaction.Query(snapshot, query);
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to get data file list from DuckLake: ");
@@ -1214,6 +1233,7 @@ WHERE bl.branch_id = {BRANCH_ID}
 	for (auto &row : *result) {
 		DuckLakeFileListEntry file_entry;
 		idx_t col_idx = 0;
+		file_entry.branch_id = BranchIndex(row.GetValue<idx_t>(col_idx++));
 		file_entry.file = ReadDataFile(table, row, col_idx, IsEncrypted());
 		if (!row.IsNull(col_idx)) {
 			file_entry.row_id_start = row.GetValue<idx_t>(col_idx);
@@ -1407,6 +1427,9 @@ WHERE bl.branch_id = {BRANCH_ID}
 	if (!where_clause.empty()) {
 		query += "\nAND " + where_clause;
 	}
+
+	fprintf(stderr, "[DEBUG GetExtendedFilesForTable] Query:\n%s\n", query.c_str());
+	fflush(stderr);
 
 	auto result = transaction.Query(snapshot, query);
 	if (result->HasError()) {

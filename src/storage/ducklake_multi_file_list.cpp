@@ -60,6 +60,7 @@ unique_ptr<MultiFileList>
 DuckLakeMultiFileList::DynamicFilterPushdown(ClientContext &context, const MultiFileOptions &options,
                                              const vector<string> &names, const vector<LogicalType> &types,
                                              const vector<column_t> &column_ids, TableFilterSet &filters) const {
+	fprintf(stderr, "[DEBUG DynamicFilterPushdown] ENTRY scan_type=%d, filters.size=%zu\n", (int)read_info.scan_type, filters.filters.size()); fflush(stderr);
 	if (read_info.scan_type != DuckLakeScanType::SCAN_TABLE || filters.filters.empty()) {
 		// filter pushdown is only supported when scanning full tables
 		return nullptr;
@@ -92,7 +93,9 @@ DuckLakeMultiFileList::DynamicFilterPushdown(ClientContext &context, const Multi
 		// no pushdown possible
 		return nullptr;
 	}
-
+        fprintf(stderr, "[DEBUG DuckLakeMultiFileList::DynamicFilterPushdown] Created new list with filter, pushdown_info=%p\n", 
+        (void*)pushdown_info.get());
+	fflush(stderr);
 	return make_uniq<DuckLakeMultiFileList>(read_info, transaction_local_files, transaction_local_data,
 	                                        std::move(pushdown_info));
 }
@@ -110,6 +113,7 @@ FileExpandResult DuckLakeMultiFileList::GetExpandResult() {
 }
 
 idx_t DuckLakeMultiFileList::GetTotalFileCount() {
+	fprintf(stderr, "[DEBUG GetTotalFileCount] called\n"); fflush(stderr);
 	return GetFiles().size();
 }
 
@@ -163,6 +167,14 @@ OpenFileInfo DuckLakeMultiFileList::GetFile(idx_t i) {
 			extended_info->options["footer_size"] = Value::UBIGINT(file.footer_size.GetIndex());
 		}
 		if (files[i].row_id_start.IsValid()) {
+
+			fprintf(stderr, "[DEBUG GetFile] file=%s, i=%zu, row_id_start=%s\n",
+        		file.path.c_str(), i,
+        		files[i].row_id_start.IsValid() 
+            			? std::to_string(files[i].row_id_start.GetIndex()).c_str() 
+            			: "NULL");
+			fflush(stderr);
+
 			extended_info->options["row_id_start"] = Value::UBIGINT(files[i].row_id_start.GetIndex());
 		}
 		Value snapshot_id;
@@ -203,6 +215,9 @@ unique_ptr<MultiFileList> DuckLakeMultiFileList::Copy() {
 	result->read_file_list = read_file_list;
 	result->delete_scans = delete_scans;
 	result->inlined_data_tables = inlined_data_tables;
+        fprintf(stderr, "[DEBUG DuckLakeMultiFileList::Copy] read_file_list=%d, filter_info=%p\n", 
+        read_file_list, (void*)filter_info.get());
+	fflush(stderr);
 	return result;
 }
 
@@ -428,6 +443,11 @@ const vector<DuckLakeFileListEntry> &DuckLakeMultiFileList::GetFiles() {
 		}
 		read_file_list = true;
 	}
+
+	fprintf(stderr, "[DEBUG DuckLakeMultiFileList::GetFiles] read_file_list=%d, filter_info=%p\n", 
+        read_file_list, (void*)filter_info.get());
+	fflush(stderr);
+
 	return files;
 }
 

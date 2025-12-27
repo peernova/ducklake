@@ -68,7 +68,7 @@ MultiFileColumnDefinition CreateColumnFromFieldId(const DuckLakeFieldId &field_i
 		column.default_expression = make_uniq<ConstantExpression>(column_data.initial_default);
 	}
 	column.identifier = Value::INTEGER(NumericCast<int32_t>(field_id.GetFieldIndex().index));
-	for (auto &child : field_id.Children()) {
+	for (auto &child	 : field_id.Children()) {
 		column.children.push_back(CreateColumnFromFieldId(*child, emit_key_value));
 	}
 	if (field_id.Type().id() == LogicalTypeId::MAP && emit_key_value) {
@@ -153,7 +153,19 @@ ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderDa
 	}
 	auto result = MultiFileReader::InitializeReader(reader_data, bind_data, global_columns, global_column_ids,
 	                                                table_filters, context, gstate);
-	if (file_entry.snapshot_filter.IsValid()) {
+	
+	fprintf(stderr, "[DEBUG InitializeReader] file_idx=%llu, reader.columns.size()=%llu, reader.column_ids.size()=%llu\n",
+        static_cast<unsigned long long>(file_idx), 
+        static_cast<unsigned long long>(reader.columns.size()), 
+        static_cast<unsigned long long>(reader.column_ids.size()));
+for (size_t i = 0; i < reader.columns.size() && i < 5; i++) {
+    fprintf(stderr, "[DEBUG InitializeReader]   col[%zu]: name=%s, identifier=%s\n",
+            i, reader.columns[i].name.c_str(), reader.columns[i].identifier.ToString().c_str());
+}
+fflush(stderr);
+
+
+		if (file_entry.snapshot_filter.IsValid()) {
 		// we have a snapshot filter - add it to the filter list
 		// find the column we need to filter on
 		auto &reader = *reader_data.reader;
@@ -324,12 +336,25 @@ vector<MultiFileColumnDefinition> CreateNewMapping(MultiFileReaderData &reader_d
                                                    const vector<MultiFileColumnDefinition> &global_map,
                                                    const DuckLakeNameMap &name_map) {
 	return MapColumns(reader_data, global_map, name_map.column_maps);
-}
+}	
+
 
 ReaderInitializeType DuckLakeMultiFileReader::CreateMapping(
     ClientContext &context, MultiFileReaderData &reader_data, const vector<MultiFileColumnDefinition> &global_columns,
     const vector<ColumnIndex> &global_column_ids, optional_ptr<TableFilterSet> filters, MultiFileList &multi_file_list,
     const MultiFileReaderBindData &bind_data, const virtual_column_map_t &virtual_columns) {
+	
+	fprintf(stderr, "[DEBUG CreateMapping] file=%s, global_columns.size()=%zu, global_column_ids.size()=%zu\n",
+	        reader_data.file_to_be_opened.path.c_str(),
+	        global_columns.size(),
+	        global_column_ids.size());
+	for (size_t i = 0; i < global_columns.size() && i < 5; i++) {
+		fprintf(stderr, "[DEBUG CreateMapping]   global_col[%zu]: name=%s, identifier=%s\n",
+		        i, global_columns[i].name.c_str(),
+		        global_columns[i].identifier.ToString().c_str());
+	}
+	fflush(stderr);
+
 	if (reader_data.reader->file.extended_info) {
 		auto &file_options = reader_data.reader->file.extended_info->options;
 		auto entry = file_options.find("mapping_id");
@@ -352,6 +377,20 @@ unique_ptr<Expression> DuckLakeMultiFileReader::GetVirtualColumnExpression(
     ClientContext &context, MultiFileReaderData &reader_data, const vector<MultiFileColumnDefinition> &local_columns,
     idx_t &column_id, const LogicalType &type, MultiFileLocalIndex local_idx,
     optional_ptr<MultiFileColumnDefinition> &global_column_reference) {
+
+	fprintf(stderr, "[DEBUG GetVirtualColumnExpression] column_id=%llu, type=%s, local_idx=%u, local_columns.size()=%zu\n",
+	        static_cast<unsigned long long>(column_id),
+	        type.ToString().c_str(),
+	        local_idx.GetIndex(),
+	        local_columns.size());
+	for (size_t i = 0; i < local_columns.size() && i < 5; i++) {
+		fprintf(stderr, "[DEBUG GetVirtualColumnExpression]   local_col[%zu]: name=%s, identifier=%s\n",
+		        i, local_columns[i].name.c_str(),
+		        local_columns[i].identifier.ToString().c_str());
+	}
+	fflush(stderr);
+
+
 	if (column_id == COLUMN_IDENTIFIER_ROW_ID) {
 		// row id column
 		// this is computed as row_id_start + file_row_number OR read from the file
