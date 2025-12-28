@@ -65,7 +65,34 @@ CreateBranchResult DuckLakeBranchManager::CreateBranch(DuckLakeTransaction &tran
 	                       NumericCast<int64_t>(new_branch_id), NumericCast<int64_t>(input.parent_branch_id.index),
 	                       NumericCast<int64_t>(fork_snapshot), NumericCast<int64_t>(input.parent_branch_id.index)));
 
-	// 6. Invalidate cache
+	// 6. Copy parent's file deletions (so child inherits deleted files from ancestors)
+	transaction.Query(
+	    StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_branch_file_deletion "
+	                       "(branch_id, ancestor_branch_id, data_file_id, deleted_at_snapshot) "
+	                       "SELECT %lld, ancestor_branch_id, data_file_id, deleted_at_snapshot "
+	                       "FROM {METADATA_CATALOG}.ducklake_branch_file_deletion "
+	                       "WHERE branch_id = %lld",
+	                       NumericCast<int64_t>(new_branch_id), NumericCast<int64_t>(input.parent_branch_id.index)));
+
+	// 7. Copy parent's delete file deletions
+	transaction.Query(
+	    StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_branch_delete_file_deletion "
+	                       "(branch_id, ancestor_branch_id, delete_file_id, deleted_at_snapshot) "
+	                       "SELECT %lld, ancestor_branch_id, delete_file_id, deleted_at_snapshot "
+	                       "FROM {METADATA_CATALOG}.ducklake_branch_delete_file_deletion "
+	                       "WHERE branch_id = %lld",
+	                       NumericCast<int64_t>(new_branch_id), NumericCast<int64_t>(input.parent_branch_id.index)));
+
+	// 8. Copy parent's partition deletions
+	transaction.Query(
+	    StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_branch_partition_deletion "
+	                       "(branch_id, ancestor_branch_id, partition_id, table_id, deleted_at_snapshot) "
+	                       "SELECT %lld, ancestor_branch_id, partition_id, table_id, deleted_at_snapshot "
+	                       "FROM {METADATA_CATALOG}.ducklake_branch_partition_deletion "
+	                       "WHERE branch_id = %lld",
+	                       NumericCast<int64_t>(new_branch_id), NumericCast<int64_t>(input.parent_branch_id.index)));
+
+	// 9. Invalidate cache
 	InvalidateCache();
 
 	CreateBranchResult result_info;

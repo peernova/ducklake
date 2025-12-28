@@ -115,6 +115,7 @@ CREATE TABLE {METADATA_CATALOG}.ducklake_branch(branch_id BIGINT PRIMARY KEY, br
 CREATE TABLE {METADATA_CATALOG}.ducklake_branch_lineage(branch_id BIGINT NOT NULL, ancestor_branch_id BIGINT NOT NULL, max_visible_snapshot BIGINT NOT NULL, PRIMARY KEY (branch_id, ancestor_branch_id));
 CREATE TABLE {METADATA_CATALOG}.ducklake_branch_file_deletion(branch_id BIGINT NOT NULL, ancestor_branch_id BIGINT NOT NULL, data_file_id BIGINT NOT NULL, deleted_at_snapshot BIGINT NOT NULL, PRIMARY KEY (branch_id, ancestor_branch_id, data_file_id));
 CREATE TABLE {METADATA_CATALOG}.ducklake_branch_delete_file_deletion(branch_id BIGINT NOT NULL, ancestor_branch_id BIGINT NOT NULL, delete_file_id BIGINT NOT NULL, deleted_at_snapshot BIGINT NOT NULL, PRIMARY KEY (branch_id, ancestor_branch_id, delete_file_id));
+CREATE TABLE {METADATA_CATALOG}.ducklake_branch_partition_deletion(branch_id BIGINT NOT NULL, ancestor_branch_id BIGINT NOT NULL, partition_id BIGINT NOT NULL, table_id BIGINT NOT NULL, deleted_at_snapshot BIGINT NOT NULL, PRIMARY KEY (branch_id, ancestor_branch_id, partition_id));
 
 -- Indexes for efficient lookups
 CREATE INDEX idx_snapshot_branch ON {METADATA_CATALOG}.ducklake_snapshot(branch_id, snapshot_id);
@@ -578,15 +579,25 @@ WHERE bl.branch_id = {BRANCH_ID}
 	}
 
 	// load partition information with branch-aware visibility
+	// Use DISTINCT ON to get one partition per table, preferring current branch over ancestors
+	// Also exclude partitions that have been "deleted" on this branch via ducklake_branch_partition_deletion
 	result = transaction.Query(snapshot, R"(
-SELECT part.partition_id, part.table_id, part_col.partition_key_index, part_col.column_id, part_col.transform
+SELECT part.partition_id, part.table_id, part_col.partition_key_index, part_col.column_id, part_col.transform, part.branch_id
 FROM {METADATA_CATALOG}.ducklake_partition_info part
 JOIN {METADATA_CATALOG}.ducklake_branch_lineage bl ON part.branch_id = bl.ancestor_branch_id
 JOIN {METADATA_CATALOG}.ducklake_partition_column part_col ON part.partition_id = part_col.partition_id AND part.branch_id = part_col.branch_id
 WHERE bl.branch_id = {BRANCH_ID}
   AND CASE WHEN part.branch_id = {BRANCH_ID} THEN {SNAPSHOT_ID} ELSE bl.max_visible_snapshot END >= part.begin_snapshot
   AND (part.end_snapshot IS NULL OR CASE WHEN part.branch_id = {BRANCH_ID} THEN {SNAPSHOT_ID} ELSE bl.max_visible_snapshot END < part.end_snapshot)
-ORDER BY part.table_id, part.partition_id, part_col.partition_key_index
+  AND NOT EXISTS (
+      SELECT 1 FROM {METADATA_CATALOG}.ducklake_branch_partition_deletion del
+      JOIN {METADATA_CATALOG}.ducklake_branch_lineage del_bl ON del.branch_id = del_bl.ancestor_branch_id
+      WHERE del_bl.branch_id = {BRANCH_ID}
+        AND del.ancestor_branch_id = part.branch_id
+        AND del.partition_id = part.partition_id
+        AND del.deleted_at_snapshot <= CASE WHEN del.branch_id = {BRANCH_ID} THEN {SNAPSHOT_ID} ELSE del_bl.max_visible_snapshot END
+  )
+ORDER BY part.table_id, part.branch_id DESC, part.begin_snapshot DESC, part_col.partition_key_index
 )");
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to get partition information from DuckLake: ");
@@ -2376,7 +2387,50 @@ void DuckLakeMetadataManager::WriteNewDataFiles(DuckLakeSnapshot commit_snapshot
 }
 
 void DuckLakeMetadataManager::DropDataFiles(DuckLakeSnapshot commit_snapshot, const set<DataFileIndex> &dropped_files) {
-	FlushDrop(commit_snapshot, "ducklake_data_file", "data_file_id", dropped_files);
+	if (dropped_files.empty()) {
+		return;
+	}
+	
+	// Build the list of dropped file IDs
+	auto dropped_id_list = GenerateIDList(dropped_files);
+	
+	// For branch-aware deletion:
+	// 1. Files that belong to the CURRENT branch -> update end_snapshot directly
+	// 2. Files that belong to ANCESTOR branches -> insert into ducklake_branch_file_deletion
+	
+	// First, update files that belong to the current branch
+	auto update_current_branch_query = StringUtil::Format(
+	    R"(UPDATE {METADATA_CATALOG}.ducklake_data_file 
+	       SET end_snapshot = {SNAPSHOT_ID} 
+	       WHERE end_snapshot IS NULL 
+	         AND branch_id = {BRANCH_ID}
+	         AND data_file_id IN (%s);)",
+	    dropped_id_list);
+	auto result = transaction.Query(commit_snapshot, update_current_branch_query);
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to update end_snapshot for current branch files in DuckLake:");
+	}
+	
+	// Second, insert deletion records for files from ancestor branches
+	// These are files that belong to ancestors (branch_id != current branch) that we're "deleting" on this branch
+	auto insert_deletion_records_query = StringUtil::Format(
+	    R"(INSERT INTO {METADATA_CATALOG}.ducklake_branch_file_deletion (branch_id, ancestor_branch_id, data_file_id, deleted_at_snapshot)
+	       SELECT {BRANCH_ID}, branch_id, data_file_id, {SNAPSHOT_ID}
+	       FROM {METADATA_CATALOG}.ducklake_data_file
+	       WHERE branch_id != {BRANCH_ID}
+	         AND data_file_id IN (%s)
+	         AND end_snapshot IS NULL
+	         AND NOT EXISTS (
+	             SELECT 1 FROM {METADATA_CATALOG}.ducklake_branch_file_deletion bfd
+	             WHERE bfd.branch_id = {BRANCH_ID}
+	               AND bfd.ancestor_branch_id = ducklake_data_file.branch_id
+	               AND bfd.data_file_id = ducklake_data_file.data_file_id
+	         );)",
+	    dropped_id_list);
+	result = transaction.Query(commit_snapshot, insert_deletion_records_query);
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to insert branch file deletion records in DuckLake:");
+	}
 }
 
 void DuckLakeMetadataManager::DropDeleteFiles(DuckLakeSnapshot commit_snapshot,
@@ -2863,17 +2917,31 @@ void DuckLakeMetadataManager::WriteNewPartitionKeys(DuckLakeSnapshot commit_snap
 	string old_partition_table_ids;
 	string new_partition_values;
 	string insert_partition_cols;
+	string partition_deletion_values;  // For tracking inherited partition deletions
 
 	auto new_partition_map = GetNewPartitions(catalog.partitions, new_partitions);
 	if (new_partition_map.empty()) {
 		return;
 	}
+	
+	// First, identify which existing partitions need to be "ended" and whether they're
+	// on the current branch or inherited from an ancestor
 	for (auto &new_partition : new_partition_map) {
-		// set old partition data as no longer valid
-		if (!old_partition_table_ids.empty()) {
-			old_partition_table_ids += ", ";
+		// Find the old partition for this table (if any) from the catalog
+		for (auto &old_partition : catalog.partitions) {
+			if (old_partition.table_id == new_partition.second.table_id) {
+				// Found existing partition for this table
+				// We need to check if it belongs to current branch or ancestor
+				// The partition loading query now includes branch_id, but the catalog struct
+				// may not have it. We need to query to find out.
+				if (!old_partition_table_ids.empty()) {
+					old_partition_table_ids += ", ";
+				}
+				old_partition_table_ids += to_string(new_partition.second.table_id.index);
+				break;
+			}
 		}
-		old_partition_table_ids += to_string(new_partition.second.table_id.index);
+		
 		if (!new_partition.second.id.IsValid()) {
 			// dropping partition data - we don't need to do anything
 			return;
@@ -2882,27 +2950,58 @@ void DuckLakeMetadataManager::WriteNewPartitionKeys(DuckLakeSnapshot commit_snap
 		if (!new_partition_values.empty()) {
 			new_partition_values += ", ";
 		}
+		// Include branch_id in the INSERT
 		new_partition_values +=
-		    StringUtil::Format(R"((%d, %d, {SNAPSHOT_ID}, NULL))", partition_id, new_partition.second.table_id.index);
+		    StringUtil::Format(R"(({BRANCH_ID}, %d, %d, {SNAPSHOT_ID}, NULL))", partition_id, new_partition.second.table_id.index);
 		for (auto &field : new_partition.second.fields) {
 			if (!insert_partition_cols.empty()) {
 				insert_partition_cols += ", ";
 			}
+			// Include branch_id in the INSERT
 			insert_partition_cols +=
-			    StringUtil::Format("(%d, %d, %d, %d, %s)", partition_id, new_partition.second.table_id.index,
+			    StringUtil::Format("({BRANCH_ID}, %d, %d, %d, %d, %s)", partition_id, new_partition.second.table_id.index,
 			                       field.partition_key_index, field.field_id.index, SQLString(field.transform));
 		}
 	}
-	// update old partition information for any tables that have been altered
-	auto update_partition_query = StringUtil::Format(R"(
+	
+	// For partitions on current branch, update them directly
+	// For inherited partitions, insert into the deletion tracking table
+	if (!old_partition_table_ids.empty()) {
+		// Update partitions that belong to current branch only
+		auto update_partition_query = StringUtil::Format(R"(
 UPDATE {METADATA_CATALOG}.ducklake_partition_info
 SET end_snapshot = {SNAPSHOT_ID}
-WHERE table_id IN (%s) AND end_snapshot IS NULL)",
-	                                                 old_partition_table_ids);
-	auto result = transaction.Query(commit_snapshot, update_partition_query);
-	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to update old partition information in DuckLake: ");
+WHERE table_id IN (%s) AND end_snapshot IS NULL AND branch_id = {BRANCH_ID})",
+		                                                 old_partition_table_ids);
+		auto result = transaction.Query(commit_snapshot, update_partition_query);
+		if (result->HasError()) {
+			result->GetErrorObject().Throw("Failed to update old partition information in DuckLake: ");
+		}
+		
+		// For inherited partitions (from ancestor branches), insert into deletion tracking table
+		// This records that "from this branch's perspective, this partition was superseded at this snapshot"
+		auto insert_deletion_query = StringUtil::Format(R"(
+INSERT INTO {METADATA_CATALOG}.ducklake_branch_partition_deletion (branch_id, ancestor_branch_id, partition_id, table_id, deleted_at_snapshot)
+SELECT {BRANCH_ID}, part.branch_id, part.partition_id, part.table_id, {SNAPSHOT_ID}
+FROM {METADATA_CATALOG}.ducklake_partition_info part
+JOIN {METADATA_CATALOG}.ducklake_branch_lineage bl ON part.branch_id = bl.ancestor_branch_id
+WHERE bl.branch_id = {BRANCH_ID}
+  AND part.table_id IN (%s)
+  AND part.end_snapshot IS NULL
+  AND part.branch_id != {BRANCH_ID}
+  AND NOT EXISTS (
+      SELECT 1 FROM {METADATA_CATALOG}.ducklake_branch_partition_deletion del
+      WHERE del.branch_id = {BRANCH_ID}
+        AND del.ancestor_branch_id = part.branch_id
+        AND del.partition_id = part.partition_id
+  ))",
+		                                                old_partition_table_ids);
+		result = transaction.Query(commit_snapshot, insert_deletion_query);
+		if (result->HasError()) {
+			result->GetErrorObject().Throw("Failed to insert partition deletion tracking in DuckLake: ");
+		}
 	}
+	
 	if (!new_partition_values.empty()) {
 		new_partition_values = "INSERT INTO {METADATA_CATALOG}.ducklake_partition_info VALUES " + new_partition_values;
 		auto result = transaction.Query(commit_snapshot, new_partition_values);

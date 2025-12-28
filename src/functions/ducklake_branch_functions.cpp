@@ -224,6 +224,33 @@ static void CreateBranchFunction(ClientContext &context, TableFunctionInput &dat
 	    "WHERE branch_id = %lld",
 	    new_branch_id, parent_branch_id, fork_snapshot, parent_branch_id));
 
+	// Copy parent's file deletions (so child inherits deleted files from ancestors)
+	transaction.Query(StringUtil::Format(
+	    "INSERT INTO {METADATA_CATALOG}.ducklake_branch_file_deletion "
+	    "(branch_id, ancestor_branch_id, data_file_id, deleted_at_snapshot) "
+	    "SELECT %lld, ancestor_branch_id, data_file_id, deleted_at_snapshot "
+	    "FROM {METADATA_CATALOG}.ducklake_branch_file_deletion "
+	    "WHERE branch_id = %lld",
+	    new_branch_id, parent_branch_id));
+
+	// Copy parent's delete file deletions
+	transaction.Query(StringUtil::Format(
+	    "INSERT INTO {METADATA_CATALOG}.ducklake_branch_delete_file_deletion "
+	    "(branch_id, ancestor_branch_id, delete_file_id, deleted_at_snapshot) "
+	    "SELECT %lld, ancestor_branch_id, delete_file_id, deleted_at_snapshot "
+	    "FROM {METADATA_CATALOG}.ducklake_branch_delete_file_deletion "
+	    "WHERE branch_id = %lld",
+	    new_branch_id, parent_branch_id));
+
+	// Copy parent's partition deletions
+	transaction.Query(StringUtil::Format(
+	    "INSERT INTO {METADATA_CATALOG}.ducklake_branch_partition_deletion "
+	    "(branch_id, ancestor_branch_id, partition_id, table_id, deleted_at_snapshot) "
+	    "SELECT %lld, ancestor_branch_id, partition_id, table_id, deleted_at_snapshot "
+	    "FROM {METADATA_CATALOG}.ducklake_branch_partition_deletion "
+	    "WHERE branch_id = %lld",
+	    new_branch_id, parent_branch_id));
+
 	output.SetValue(0, 0, Value::BIGINT(new_branch_id));
 	output.SetValue(1, 0, Value(bind_data.branch_name));
 	output.SetValue(2, 0, Value::BIGINT(fork_snapshot));
