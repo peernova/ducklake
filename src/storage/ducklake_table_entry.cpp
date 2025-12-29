@@ -304,7 +304,7 @@ TableFunction DuckLakeTableEntry::GetScanFunction(ClientContext &context, unique
 			} else {
 				snapshot_id = branch_info.head_snapshot_id;
 			}
-			snapshot = DuckLakeSnapshot(snapshot_id, 0, 0, 0);
+			snapshot = DuckLakeSnapshot(snapshot_id, 0, 0, 0, branch_id);
 		} else {
 			// VERSION or TIMESTAMP - use main branch
 			fprintf(stderr, "[DEBUG] Falling through to VERSION/TIMESTAMP handler for unit: '%s'\n", unit.c_str());
