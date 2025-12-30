@@ -1200,20 +1200,31 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLake
 
 	// Add base query with branch-aware visibility
 	// Join with branch_lineage to only see data files visible to this branch
+	// Include del.delete_file_branch_id so we know which branch created the delete file (for branch-aware delete merging)
+	// Use ROW_NUMBER() to pick only the most specific delete file for each data file
+	// Priority: current branch first, then by branch proximity (higher max_visible_snapshot = more specific)
 	query += StringUtil::Format(R"(
-SELECT %s
+SELECT %s, del.delete_file_branch_id
 FROM {METADATA_CATALOG}.ducklake_data_file data
 JOIN {METADATA_CATALOG}.ducklake_branch_lineage bl ON data.branch_id = bl.ancestor_branch_id
 LEFT JOIN (
-    SELECT del_inner.path, del_inner.path_is_relative, del_inner.file_size_bytes, del_inner.footer_size, del_inner.encryption_key,
-           del_inner.data_file_id AS join_data_file_id, del_inner.data_file_branch_id AS join_data_file_branch_id
-    FROM {METADATA_CATALOG}.ducklake_delete_file del_inner
-    JOIN {METADATA_CATALOG}.ducklake_branch_lineage del_bl ON del_inner.branch_id = del_bl.ancestor_branch_id
-    WHERE del_bl.branch_id = {BRANCH_ID}
-      AND del_inner.table_id=%d
-      AND CASE WHEN del_inner.branch_id = {BRANCH_ID} THEN {SNAPSHOT_ID} ELSE del_bl.max_visible_snapshot END >= del_inner.begin_snapshot
-      AND (del_inner.end_snapshot IS NULL OR CASE WHEN del_inner.branch_id = {BRANCH_ID} THEN {SNAPSHOT_ID} ELSE del_bl.max_visible_snapshot END < del_inner.end_snapshot)
-    ) del ON data.data_file_id = del.join_data_file_id AND data.branch_id = del.join_data_file_branch_id
+    SELECT delete_file_branch_id, path, path_is_relative, file_size_bytes, footer_size, encryption_key,
+           join_data_file_id, join_data_file_branch_id
+    FROM (
+        SELECT del_inner.branch_id AS delete_file_branch_id, del_inner.path, del_inner.path_is_relative, del_inner.file_size_bytes, del_inner.footer_size, del_inner.encryption_key,
+               del_inner.data_file_id AS join_data_file_id, del_inner.data_file_branch_id AS join_data_file_branch_id,
+               ROW_NUMBER() OVER (
+                   PARTITION BY del_inner.data_file_id, del_inner.data_file_branch_id
+                   ORDER BY CASE WHEN del_inner.branch_id = {BRANCH_ID} THEN 0 ELSE 1 END, del_bl.max_visible_snapshot DESC
+               ) as rn
+        FROM {METADATA_CATALOG}.ducklake_delete_file del_inner
+        JOIN {METADATA_CATALOG}.ducklake_branch_lineage del_bl ON del_inner.branch_id = del_bl.ancestor_branch_id
+        WHERE del_bl.branch_id = {BRANCH_ID}
+          AND del_inner.table_id=%d
+          AND CASE WHEN del_inner.branch_id = {BRANCH_ID} THEN {SNAPSHOT_ID} ELSE del_bl.max_visible_snapshot END >= del_inner.begin_snapshot
+          AND (del_inner.end_snapshot IS NULL OR CASE WHEN del_inner.branch_id = {BRANCH_ID} THEN {SNAPSHOT_ID} ELSE del_bl.max_visible_snapshot END < del_inner.end_snapshot)
+    ) ranked WHERE rn = 1
+) del ON data.data_file_id = del.join_data_file_id AND data.branch_id = del.join_data_file_branch_id
 WHERE bl.branch_id = {BRANCH_ID}
   AND data.table_id=%d
   AND CASE WHEN data.branch_id = {BRANCH_ID} THEN {SNAPSHOT_ID} ELSE bl.max_visible_snapshot END >= data.begin_snapshot
@@ -1261,6 +1272,10 @@ WHERE bl.branch_id = {BRANCH_ID}
 		}
 		col_idx++;
 		file_entry.delete_file = ReadDataFile(table, row, col_idx, IsEncrypted());
+		// Read delete_file_branch_id (last column added after delete file data)
+		if (!row.IsNull(col_idx)) {
+			file_entry.delete_file_branch_id = BranchIndex(row.GetValue<idx_t>(col_idx));
+		}
 		files.push_back(std::move(file_entry));
 	}
 	return files;
@@ -1406,20 +1421,31 @@ DuckLakeMetadataManager::GetExtendedFilesForTable(DuckLakeTableEntry &table, Duc
 
 	// Add base query with branch-aware visibility
 	// Include data.branch_id so we know which branch owns each data file (needed for delete file creation)
+	// Include del.delete_file_branch_id so we know which branch created the delete file (for branch-aware delete merging)
+	// Use ROW_NUMBER() to pick only the most specific delete file for each data file
+	// (the one from the branch closest to the current branch - highest priority goes to current branch, then parent, etc.)
 	query += StringUtil::Format(R"(
-SELECT data.data_file_id, del.delete_file_id, data.record_count, data.branch_id, %s
+SELECT data.data_file_id, del.delete_file_id, data.record_count, data.branch_id, del.delete_file_branch_id, %s
 FROM {METADATA_CATALOG}.ducklake_data_file data
 JOIN {METADATA_CATALOG}.ducklake_branch_lineage bl ON data.branch_id = bl.ancestor_branch_id
 LEFT JOIN (
-    SELECT del_inner.delete_file_id, del_inner.path, del_inner.path_is_relative, del_inner.file_size_bytes, del_inner.footer_size, del_inner.encryption_key,
-           del_inner.data_file_id AS join_data_file_id, del_inner.data_file_branch_id AS join_data_file_branch_id
-    FROM {METADATA_CATALOG}.ducklake_delete_file del_inner
-    JOIN {METADATA_CATALOG}.ducklake_branch_lineage del_bl ON del_inner.branch_id = del_bl.ancestor_branch_id
-    WHERE del_bl.branch_id = {BRANCH_ID}
-      AND del_inner.table_id=%d
-      AND CASE WHEN del_inner.branch_id = {BRANCH_ID} THEN {SNAPSHOT_ID} ELSE del_bl.max_visible_snapshot END >= del_inner.begin_snapshot
-      AND (del_inner.end_snapshot IS NULL OR CASE WHEN del_inner.branch_id = {BRANCH_ID} THEN {SNAPSHOT_ID} ELSE del_bl.max_visible_snapshot END < del_inner.end_snapshot)
-    ) del ON data.data_file_id = del.join_data_file_id AND data.branch_id = del.join_data_file_branch_id
+    SELECT delete_file_id, delete_file_branch_id, path, path_is_relative, file_size_bytes, footer_size, encryption_key,
+           join_data_file_id, join_data_file_branch_id
+    FROM (
+        SELECT del_inner.delete_file_id, del_inner.branch_id AS delete_file_branch_id, del_inner.path, del_inner.path_is_relative, del_inner.file_size_bytes, del_inner.footer_size, del_inner.encryption_key,
+               del_inner.data_file_id AS join_data_file_id, del_inner.data_file_branch_id AS join_data_file_branch_id,
+               ROW_NUMBER() OVER (
+                   PARTITION BY del_inner.data_file_id, del_inner.data_file_branch_id
+                   ORDER BY CASE WHEN del_inner.branch_id = {BRANCH_ID} THEN 0 ELSE 1 END, del_bl.max_visible_snapshot DESC
+               ) as rn
+        FROM {METADATA_CATALOG}.ducklake_delete_file del_inner
+        JOIN {METADATA_CATALOG}.ducklake_branch_lineage del_bl ON del_inner.branch_id = del_bl.ancestor_branch_id
+        WHERE del_bl.branch_id = {BRANCH_ID}
+          AND del_inner.table_id=%d
+          AND CASE WHEN del_inner.branch_id = {BRANCH_ID} THEN {SNAPSHOT_ID} ELSE del_bl.max_visible_snapshot END >= del_inner.begin_snapshot
+          AND (del_inner.end_snapshot IS NULL OR CASE WHEN del_inner.branch_id = {BRANCH_ID} THEN {SNAPSHOT_ID} ELSE del_bl.max_visible_snapshot END < del_inner.end_snapshot)
+    ) ranked WHERE rn = 1
+) del ON data.data_file_id = del.join_data_file_id AND data.branch_id = del.join_data_file_branch_id
 WHERE bl.branch_id = {BRANCH_ID}
   AND data.table_id=%d
   AND CASE WHEN data.branch_id = {BRANCH_ID} THEN {SNAPSHOT_ID} ELSE bl.max_visible_snapshot END >= data.begin_snapshot
@@ -1455,7 +1481,10 @@ WHERE bl.branch_id = {BRANCH_ID}
 		}
 		file_entry.row_count = row.GetValue<idx_t>(2);
 		file_entry.branch_id = BranchIndex(row.GetValue<idx_t>(3));  // Data file's owning branch
-		idx_t col_idx = 4;
+		if (!row.IsNull(4)) {
+			file_entry.delete_file_branch_id = BranchIndex(row.GetValue<idx_t>(4));  // Delete file's owning branch
+		}
+		idx_t col_idx = 5;
 		file_entry.file = ReadDataFile(table, row, col_idx, IsEncrypted());
 		if (!row.IsNull(col_idx)) {
 			file_entry.row_id_start = row.GetValue<idx_t>(col_idx);
@@ -2435,26 +2464,7 @@ void DuckLakeMetadataManager::DropDataFiles(DuckLakeSnapshot commit_snapshot, co
 
 void DuckLakeMetadataManager::DropDeleteFiles(DuckLakeSnapshot commit_snapshot,
                                               const set<DataFileIndex> &dropped_files) {
-	if (dropped_files.empty()) {
-		return;
-	}
-
-	// Build the list of dropped file IDs
-	auto dropped_id_list = GenerateIDList(dropped_files);
-
-	// Only update delete files that belong to the current branch
-	// Delete files from other branches should not be modified
-	auto update_current_branch_query = StringUtil::Format(
-	    R"(UPDATE {METADATA_CATALOG}.ducklake_delete_file
-	       SET end_snapshot = {SNAPSHOT_ID}
-	       WHERE end_snapshot IS NULL
-	         AND branch_id = {BRANCH_ID}
-	         AND data_file_id IN (%s);)",
-	    dropped_id_list);
-	auto result = transaction.Query(commit_snapshot, update_current_branch_query);
-	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to update end_snapshot for delete files in DuckLake:");
-	}
+	FlushDrop(commit_snapshot, "ducklake_delete_file", "data_file_id", dropped_files);
 }
 
 void DuckLakeMetadataManager::WriteNewDeleteFiles(DuckLakeSnapshot commit_snapshot,
@@ -2862,7 +2872,8 @@ WHERE branch_id = %d AND snapshot_id = (
 		        static_cast<unsigned long long>(snapshot_id));
 		fflush(stderr);
 
-		// Use COALESCE with parent lookup to handle newly created branches
+		// Get the snapshot details for this branch
+		// Use COALESCE to fall back to parent branch's snapshot for newly created branches
 		// that haven't had any commits yet (they inherit from their parent at the fork point)
 		result = transaction.Query(StringUtil::Format(R"(
 SELECT

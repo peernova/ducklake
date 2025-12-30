@@ -319,6 +319,7 @@ enum class DuckLakeDataType {
 
 struct DuckLakeFileListEntry {
 	BranchIndex branch_id;
+	BranchIndex delete_file_branch_id;  // Branch that created the delete file (for branch-aware delete merging)
 	DuckLakeFileData file;
 	DuckLakeFileData delete_file;
 	optional_idx row_id_start;
@@ -343,6 +344,7 @@ struct DuckLakeFileListExtendedEntry {
 	BranchIndex branch_id;
 	DataFileIndex file_id;
 	DataFileIndex delete_file_id;
+	BranchIndex delete_file_branch_id;  // Branch that created the delete file (for branch-aware delete merging)
 	DuckLakeFileData file;
 	DuckLakeFileData delete_file;
 	optional_idx row_id_start;

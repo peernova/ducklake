@@ -133,6 +133,8 @@ ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderDa
 			auto delete_filter = make_uniq<DuckLakeDeleteFilter>();
 			if (!file_entry.delete_file.path.empty()) {
 				delete_filter->Initialize(context, file_entry.delete_file);
+				// Set the branch_id that created this delete file (for branch-aware delete merging)
+				delete_filter->delete_data->branch_id = file_entry.delete_file_branch_id;
 			}
 			if (file_entry.max_row_count.IsValid()) {
 				delete_filter->SetMaxRowCount(file_entry.max_row_count.GetIndex());

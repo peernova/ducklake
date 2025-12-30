@@ -15,6 +15,7 @@ namespace duckdb {
 
 struct DuckLakeDeleteData {
 	vector<idx_t> deleted_rows;
+	BranchIndex branch_id;  // Branch that created this delete data (for branch-aware delete merging)
 
 	idx_t Filter(row_t start_row_index, idx_t count, SelectionVector &result_sel) const;
 };
