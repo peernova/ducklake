@@ -2435,7 +2435,26 @@ void DuckLakeMetadataManager::DropDataFiles(DuckLakeSnapshot commit_snapshot, co
 
 void DuckLakeMetadataManager::DropDeleteFiles(DuckLakeSnapshot commit_snapshot,
                                               const set<DataFileIndex> &dropped_files) {
-	FlushDrop(commit_snapshot, "ducklake_delete_file", "data_file_id", dropped_files);
+	if (dropped_files.empty()) {
+		return;
+	}
+
+	// Build the list of dropped file IDs
+	auto dropped_id_list = GenerateIDList(dropped_files);
+
+	// Only update delete files that belong to the current branch
+	// Delete files from other branches should not be modified
+	auto update_current_branch_query = StringUtil::Format(
+	    R"(UPDATE {METADATA_CATALOG}.ducklake_delete_file
+	       SET end_snapshot = {SNAPSHOT_ID}
+	       WHERE end_snapshot IS NULL
+	         AND branch_id = {BRANCH_ID}
+	         AND data_file_id IN (%s);)",
+	    dropped_id_list);
+	auto result = transaction.Query(commit_snapshot, update_current_branch_query);
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to update end_snapshot for delete files in DuckLake:");
+	}
 }
 
 void DuckLakeMetadataManager::WriteNewDeleteFiles(DuckLakeSnapshot commit_snapshot,
@@ -2843,12 +2862,24 @@ WHERE branch_id = %d AND snapshot_id = (
 		        static_cast<unsigned long long>(snapshot_id));
 		fflush(stderr);
 
-		// Get the snapshot details for this branch
+		// Use COALESCE with parent lookup to handle newly created branches
+		// that haven't had any commits yet (they inherit from their parent at the fork point)
 		result = transaction.Query(StringUtil::Format(R"(
-SELECT snapshot_id, schema_version, next_catalog_id, next_file_id
-FROM {METADATA_CATALOG}.ducklake_snapshot
-WHERE branch_id = %llu AND snapshot_id = %llu;)",
-		                                              branch_info.branch_id.index, snapshot_id));
+SELECT
+    COALESCE(own.snapshot_id, b.fork_snapshot_id) as snapshot_id,
+    COALESCE(own.schema_version, parent.schema_version) as schema_version,
+    COALESCE(own.next_catalog_id, parent.next_catalog_id) as next_catalog_id,
+    COALESCE(own.next_file_id, parent.next_file_id) as next_file_id
+FROM {METADATA_CATALOG}.ducklake_branch b
+LEFT JOIN (
+    SELECT snapshot_id, schema_version, next_catalog_id, next_file_id
+    FROM {METADATA_CATALOG}.ducklake_snapshot
+    WHERE branch_id = %llu AND snapshot_id = %llu
+) own ON true
+LEFT JOIN {METADATA_CATALOG}.ducklake_snapshot parent
+    ON parent.branch_id = b.parent_branch_id AND parent.snapshot_id = b.fork_snapshot_id
+WHERE b.branch_id = %llu;)",
+		                                              branch_info.branch_id.index, snapshot_id, branch_info.branch_id.index));
 		// Use the branch_id from branch_info when creating the snapshot
 		if (result->HasError()) {
 			result->GetErrorObject().Throw(StringUtil::Format(

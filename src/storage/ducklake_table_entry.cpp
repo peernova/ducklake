@@ -312,12 +312,28 @@ TableFunction DuckLakeTableEntry::GetScanFunction(ClientContext &context, unique
 			branch_name = "main";
 		}
 	} else {
-		// Use current snapshot
+		// Use current snapshot (which includes the current working branch)
 		snapshot = transaction.GetSnapshot();
-		branch_name = "main";
+		branch_id = snapshot.branch_id;
+		// Get branch name from the branch manager if not on main
+		if (branch_id.index != 0) {
+			auto &metadata_manager = transaction.GetMetadataManager();
+			auto &branch_manager = metadata_manager.GetBranchManager();
+			auto branch_info = branch_manager.GetBranch(transaction, branch_id);
+			branch_name = branch_info.branch_name;
+		} else {
+			branch_name = "main";
+		}
 	}
 
 	auto function_info = make_shared_ptr<DuckLakeFunctionInfo>(*this, transaction, snapshot);
+	
+	fprintf(stderr, "[DEBUG GetScanFunction] Creating function_info with snapshot: branch_id=%llu, snapshot_id=%llu\n",
+	        static_cast<unsigned long long>(snapshot.branch_id.index),
+	        static_cast<unsigned long long>(snapshot.snapshot_id));
+	fflush(stderr);	
+
+	
 	function_info->table_name = name;
 	function_info->branch_id = branch_id;
 	function_info->branch_name = branch_name;

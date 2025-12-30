@@ -1819,6 +1819,16 @@ DuckLakeSnapshot DuckLakeTransaction::GetSnapshot() {
 	return *snapshot;
 }
 
+void DuckLakeTransaction::InvalidateSnapshot() {
+
+	lock_guard<mutex> guard(snapshot_lock);
+
+	snapshot.reset();
+
+	snapshot_cache.clear();
+
+}
+
 DuckLakeSnapshot DuckLakeTransaction::GetSnapshot(optional_ptr<BoundAtClause> at_clause, SnapshotBound bound) {
 	if (!at_clause) {
 		// no AT-clause - get the latest snapshot

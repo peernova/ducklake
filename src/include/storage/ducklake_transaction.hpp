@@ -72,6 +72,9 @@ public:
 	DuckLakeSnapshot GetSnapshot(optional_ptr<BoundAtClause> at_clause,
 	                             SnapshotBound bound = SnapshotBound::UPPER_BOUND);
 
+	//! Invalidate the cached snapshot (e.g., when switching branches)
+	void InvalidateSnapshot();
+
 	static DuckLakeTransaction &Get(ClientContext &context, Catalog &catalog);
 
 	void CreateEntry(unique_ptr<CatalogEntry> entry);

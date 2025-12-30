@@ -511,6 +511,9 @@ static void UseBranchFunction(ClientContext &context, TableFunctionInput &data_p
 	auto &ducklake_catalog = catalog.Cast<DuckLakeCatalog>();
 	ducklake_catalog.SetWorkingBranch(BranchIndex(NumericCast<idx_t>(branch_id)));
 
+	// Invalidate cached snapshot so subsequent queries use the new branch's snapshot
+	transaction.InvalidateSnapshot();
+
 	output.SetValue(0, 0, Value(bind_data.catalog_name));
 	output.SetValue(1, 0, Value(bind_data.branch_name));
 	output.SetValue(2, 0, Value::BIGINT(branch_id));
