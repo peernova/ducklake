@@ -1276,8 +1276,15 @@ WHERE bl.branch_id = {BRANCH_ID}
 		if (!row.IsNull(col_idx)) {
 			file_entry.delete_file_branch_id = BranchIndex(row.GetValue<idx_t>(col_idx));
 		}
+		fprintf(stderr, "[DEBUG GetFilesForTable] File: branch_id=%llu, has_delete=%s, delete_path=%s\n",
+		        static_cast<unsigned long long>(file_entry.branch_id.index),
+		        file_entry.delete_file.path.empty() ? "no" : "yes",
+		        file_entry.delete_file.path.empty() ? "N/A" : file_entry.delete_file.path.c_str());
+		fflush(stderr);
 		files.push_back(std::move(file_entry));
 	}
+	fprintf(stderr, "[DEBUG GetFilesForTable] Total files returned: %zu\n", files.size());
+	fflush(stderr);
 	return files;
 }
 
@@ -1631,8 +1638,9 @@ void DuckLakeMetadataManager::FlushDrop(DuckLakeSnapshot commit_snapshot, const 
 		return;
 	}
 	auto dropped_id_list = GenerateIDList(dropped_entries);
+	// Only drop entries from the current branch - other branches' entries should remain visible to them
 	auto dropped_id_query = StringUtil::Format(
-	    R"(UPDATE {METADATA_CATALOG}.%s SET end_snapshot = {SNAPSHOT_ID} WHERE end_snapshot IS NULL AND %s IN (%s);)",
+	    R"(UPDATE {METADATA_CATALOG}.%s SET end_snapshot = {SNAPSHOT_ID} WHERE branch_id = {BRANCH_ID} AND end_snapshot IS NULL AND %s IN (%s);)",
 	    metadata_table_name, id_name, dropped_id_list);
 	auto result = transaction.Query(commit_snapshot, dropped_id_query);
 	if (result->HasError()) {
@@ -2464,6 +2472,14 @@ void DuckLakeMetadataManager::DropDataFiles(DuckLakeSnapshot commit_snapshot, co
 
 void DuckLakeMetadataManager::DropDeleteFiles(DuckLakeSnapshot commit_snapshot,
                                               const set<DataFileIndex> &dropped_files) {
+	fprintf(stderr, "[DEBUG DropDeleteFiles] Dropping delete files for %zu data_file_ids, branch_id=%llu, snapshot_id=%llu\n",
+	        dropped_files.size(),
+	        static_cast<unsigned long long>(commit_snapshot.branch_id.index),
+	        static_cast<unsigned long long>(commit_snapshot.snapshot_id));
+	for (auto &id : dropped_files) {
+		fprintf(stderr, "[DEBUG DropDeleteFiles]   data_file_id=%llu\n", static_cast<unsigned long long>(id.index));
+	}
+	fflush(stderr);
 	FlushDrop(commit_snapshot, "ducklake_delete_file", "data_file_id", dropped_files);
 }
 

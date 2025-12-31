@@ -132,7 +132,12 @@ ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderDa
 		} else if (!file_entry.delete_file.path.empty() || file_entry.max_row_count.IsValid()) {
 			auto delete_filter = make_uniq<DuckLakeDeleteFilter>();
 			if (!file_entry.delete_file.path.empty()) {
+				fprintf(stderr, "[DEBUG MultiFileReader] Initializing delete filter with path: %s\n", file_entry.delete_file.path.c_str());
+				fflush(stderr);
 				delete_filter->Initialize(context, file_entry.delete_file);
+				fprintf(stderr, "[DEBUG MultiFileReader] Delete filter initialized, deleted_rows count: %zu\n",
+				        delete_filter->delete_data ? delete_filter->delete_data->deleted_rows.size() : 0);
+				fflush(stderr);
 				// Set the branch_id that created this delete file (for branch-aware delete merging)
 				delete_filter->delete_data->branch_id = file_entry.delete_file_branch_id;
 			}

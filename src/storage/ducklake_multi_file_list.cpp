@@ -434,6 +434,11 @@ const DuckLakeDeleteScanEntry &DuckLakeMultiFileList::GetDeleteScanEntry(idx_t f
 
 const vector<DuckLakeFileListEntry> &DuckLakeMultiFileList::GetFiles() {
 	lock_guard<mutex> l(file_lock);
+	fprintf(stderr, "[DEBUG GetFiles] Entry: read_file_list=%d, snapshot.branch_id=%llu, snapshot.snapshot_id=%llu\n",
+	        read_file_list,
+	        static_cast<unsigned long long>(read_info.snapshot.branch_id.index),
+	        static_cast<unsigned long long>(read_info.snapshot.snapshot_id));
+	fflush(stderr);
 	if (!read_file_list) {
 		// we have not read the file list yet - read it
 		switch (read_info.scan_type) {
@@ -450,11 +455,9 @@ const vector<DuckLakeFileListEntry> &DuckLakeMultiFileList::GetFiles() {
 			throw InternalException("Unknown DuckLake scan type");
 		}
 		read_file_list = true;
+		fprintf(stderr, "[DEBUG GetFiles] File list loaded, files.size()=%zu\n", files.size());
+		fflush(stderr);
 	}
-
-	fprintf(stderr, "[DEBUG DuckLakeMultiFileList::GetFiles] read_file_list=%d, filter_info=%p\n", 
-        read_file_list, (void*)filter_info.get());
-	fflush(stderr);
 
 	return files;
 }

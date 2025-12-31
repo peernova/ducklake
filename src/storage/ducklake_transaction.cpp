@@ -1306,6 +1306,10 @@ DuckLakeTransaction::GetNewDeleteFiles(const DuckLakeCommitState &commit_state,
 		auto &table_changes = entry.second;
 		for (auto &file_entry : table_changes.new_delete_files) {
 			auto &file = file_entry.second;
+			fprintf(stderr, "[DEBUG GetNewDeleteFiles] data_file_id=%llu, overwrites_existing_delete=%s\n",
+			        static_cast<unsigned long long>(file.data_file_id.index),
+			        file.overwrites_existing_delete ? "yes" : "no");
+			fflush(stderr);
 			if (file.overwrites_existing_delete) {
 				overwritten_delete_files.insert(file.data_file_id);
 			}

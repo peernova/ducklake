@@ -229,43 +229,26 @@ void DuckLakeDelete::FlushDelete(DuckLakeTransaction &transaction, ClientContext
 	// Get the current working branch from the snapshot
 	auto working_branch = transaction.GetSnapshot().branch_id;
 
-	fprintf(stderr, "[DEBUG FlushDelete] filename=%s, working_branch=%llu, data_file_branch=%llu\n",
-	        filename.c_str(),
-	        static_cast<unsigned long long>(working_branch.index),
-	        static_cast<unsigned long long>(data_file_info.branch_id.index));
-	fprintf(stderr, "[DEBUG FlushDelete] existing_delete_data=%s\n", existing_delete_data ? "yes" : "no");
-	if (existing_delete_data) {
-		fprintf(stderr, "[DEBUG FlushDelete] existing_delete_data->branch_id=%llu, count=%zu\n",
-		        static_cast<unsigned long long>(existing_delete_data->branch_id.index),
-		        existing_delete_data->deleted_rows.size());
-	}
-	fprintf(stderr, "[DEBUG FlushDelete] sorted_deletes.size() before merge=%zu\n", sorted_deletes.size());
-	fflush(stderr);
-
 	// Always merge with existing deletes (from any branch in the lineage)
 	// Each branch's delete file should contain ALL deletes visible to that branch,
 	// so when reading we only need to look at the most specific delete file
 	if (existing_delete_data) {
-		fprintf(stderr, "[DEBUG FlushDelete] MERGING existing deletes from branch %llu into branch %llu\n",
-		        static_cast<unsigned long long>(existing_delete_data->branch_id.index),
-		        static_cast<unsigned long long>(working_branch.index));
-		fflush(stderr);
+		// Copy the branch_id before clearing (ClearDeletes will invalidate the pointer)
+		auto existing_branch_id = existing_delete_data->branch_id;
+
 		// deletes already exist for this file - add to set of deletes to write
 		auto &existing_deletes = existing_delete_data->deleted_rows;
 		sorted_deletes.insert(existing_deletes.begin(), existing_deletes.end());
 
-		// clear the deletes
+		// clear the deletes - this invalidates existing_delete_data pointer!
 		delete_map->ClearDeletes(filename);
 
 		// only set overwrites_existing_delete if the existing delete was from the SAME branch
 		// (ancestor branch deletes are not overwritten - they remain visible to that branch)
-		if (existing_delete_data->branch_id == working_branch) {
+		if (existing_branch_id == working_branch) {
 			delete_file.overwrites_existing_delete = true;
 		}
 	}
-
-	fprintf(stderr, "[DEBUG FlushDelete] sorted_deletes.size() after merge=%zu\n", sorted_deletes.size());
-	fflush(stderr);
 	if (sorted_deletes.size() == data_file_info.row_count) {
 		// ALL rows in this file are deleted - we don't need to write the deletes out to a file
 		// we can just invalidate the source data file directly
