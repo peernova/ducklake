@@ -625,25 +625,24 @@ ORDER BY part.table_id, part.branch_id DESC, part.begin_snapshot DESC, part_col.
 }
 
 vector<DuckLakeGlobalStatsInfo> DuckLakeMetadataManager::GetGlobalTableStats(DuckLakeSnapshot snapshot) {
-	// query the most recent stats with branch filtering
+	// Query stats directly for the current branch (each branch has its own copy of stats)
+	// Stats are copied when a branch is created, so we always have stats for the current branch
 	auto result = transaction.Query(snapshot, R"(
 SELECT
     ts.table_id,
     tcs.column_id,
-    SUM(ts.record_count) as record_count,
-    MAX(ts.next_row_id) as next_row_id,
-    SUM(ts.file_size_bytes) as file_size_bytes,
-    BOOL_OR(tcs.contains_null) as contains_null,
-    BOOL_OR(tcs.contains_nan) as contains_nan,
-    MIN(tcs.min_value) as min_value,
-    MAX(tcs.max_value) as max_value,
-    NULL as extra_stats
+    ts.record_count,
+    ts.next_row_id,
+    ts.file_size_bytes,
+    tcs.contains_null,
+    tcs.contains_nan,
+    tcs.min_value,
+    tcs.max_value,
+    tcs.extra_stats
 FROM {METADATA_CATALOG}.ducklake_table_stats ts
-JOIN {METADATA_CATALOG}.ducklake_branch_lineage bl ON ts.branch_id = bl.ancestor_branch_id
 LEFT JOIN {METADATA_CATALOG}.ducklake_table_column_stats tcs ON ts.table_id = tcs.table_id AND ts.branch_id = tcs.branch_id
-WHERE bl.branch_id = {BRANCH_ID}
+WHERE ts.branch_id = {BRANCH_ID}
   AND ts.record_count IS NOT NULL AND ts.file_size_bytes IS NOT NULL
-GROUP BY ts.table_id, tcs.column_id
 ORDER BY ts.table_id
 )");
 	if (result->HasError()) {

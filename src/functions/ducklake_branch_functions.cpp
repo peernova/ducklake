@@ -251,6 +251,24 @@ static void CreateBranchFunction(ClientContext &context, TableFunctionInput &dat
 	    "WHERE branch_id = %lld",
 	    new_branch_id, parent_branch_id));
 
+	// Copy parent's table stats (so child starts with same counts as parent at fork point)
+	transaction.Query(StringUtil::Format(
+	    "INSERT INTO {METADATA_CATALOG}.ducklake_table_stats "
+	    "(branch_id, table_id, record_count, next_row_id, file_size_bytes) "
+	    "SELECT %lld, table_id, record_count, next_row_id, file_size_bytes "
+	    "FROM {METADATA_CATALOG}.ducklake_table_stats "
+	    "WHERE branch_id = %lld",
+	    new_branch_id, parent_branch_id));
+
+	// Copy parent's table column stats
+	transaction.Query(StringUtil::Format(
+	    "INSERT INTO {METADATA_CATALOG}.ducklake_table_column_stats "
+	    "(branch_id, table_id, column_id, contains_null, contains_nan, min_value, max_value, extra_stats) "
+	    "SELECT %lld, table_id, column_id, contains_null, contains_nan, min_value, max_value, extra_stats "
+	    "FROM {METADATA_CATALOG}.ducklake_table_column_stats "
+	    "WHERE branch_id = %lld",
+	    new_branch_id, parent_branch_id));
+
 	output.SetValue(0, 0, Value::BIGINT(new_branch_id));
 	output.SetValue(1, 0, Value(bind_data.branch_name));
 	output.SetValue(2, 0, Value::BIGINT(fork_snapshot));
