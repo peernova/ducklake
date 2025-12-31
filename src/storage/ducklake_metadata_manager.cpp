@@ -2671,14 +2671,17 @@ SnapshotChangeInfo DuckLakeMetadataManager::GetChangesMadeAfterSnapshot(DuckLake
 SnapshotDeletedFromFiles
 DuckLakeMetadataManager::GetFilesDeletedOrDroppedAfterSnapshot(DuckLakeSnapshot start_snapshot) {
 	// get all changes made to the system after the snapshot was started
+	// NOTE: We only check for conflicts within the SAME branch. Different branches can independently
+	// create delete files for the same parent data file without causing conflicts, because each branch
+	// has its own isolated view of the data.
 	auto result = transaction.Query(start_snapshot, R"(
 	SELECT data_file_id
 	FROM {METADATA_CATALOG}.ducklake_delete_file
-	WHERE begin_snapshot > {SNAPSHOT_ID}
+	WHERE branch_id = {BRANCH_ID} AND begin_snapshot > {SNAPSHOT_ID}
 	UNION ALL
 	SELECT data_file_id
 	FROM {METADATA_CATALOG}.ducklake_data_file
-	WHERE end_snapshot IS NOT NULL AND end_snapshot > {SNAPSHOT_ID}
+	WHERE branch_id = {BRANCH_ID} AND end_snapshot IS NOT NULL AND end_snapshot > {SNAPSHOT_ID}
 	)");
 	if (result->HasError()) {
 		result->GetErrorObject().Throw(
