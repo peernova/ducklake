@@ -485,7 +485,9 @@ unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTr
 DuckLakeStats &DuckLakeCatalog::GetStatsForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot) {
 	auto &schema = GetSchemaForSnapshot(transaction, snapshot);
 	lock_guard<mutex> guard(schemas_lock);
-	auto entry = stats.find(snapshot.next_file_id);
+	// Use (branch_id, next_file_id) as key because different branches have different column statistics
+	auto stats_key = make_pair(snapshot.branch_id.index, snapshot.next_file_id);
+	auto entry = stats.find(stats_key);
 	if (entry != stats.end()) {
 		// this stats are already cached
 		return *entry->second;
@@ -493,7 +495,7 @@ DuckLakeStats &DuckLakeCatalog::GetStatsForSnapshot(DuckLakeTransaction &transac
 	// load the stats from the metadata manager
 	auto table_stats = LoadStatsForSnapshot(transaction, snapshot, schema);
 	auto &result = *table_stats;
-	stats.insert(make_pair(snapshot.next_file_id, std::move(table_stats)));
+	stats.insert(make_pair(stats_key, std::move(table_stats)));
 	return result;
 }
 

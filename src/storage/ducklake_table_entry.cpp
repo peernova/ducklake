@@ -286,34 +286,17 @@ TableFunction DuckLakeTableEntry::GetScanFunction(ClientContext &context, unique
 		if (StringUtil::CIEquals(unit, "branch")) {
 			fprintf(stderr, "[DEBUG] Matched BRANCH unit\n");
 			fflush(stderr);
-			// Handle BRANCH unit in AT clause
+			// Handle BRANCH unit in AT clause - use GetSnapshot to get proper snapshot with correct next_file_id
+			snapshot = transaction.GetSnapshot(lookup_info.GetAtClause());
+			branch_id = snapshot.branch_id;
+			// Get branch name from the branch manager
 			auto &metadata_manager = transaction.GetMetadataManager();
 			auto &branch_manager = metadata_manager.GetBranchManager();
-
-			// Parse branch name (and optional version) from AT clause value
 			auto branch_str = at_clause.GetValue().DefaultCastAs(LogicalType::VARCHAR).GetValue<string>();
-			string parsed_branch_name;
-			optional_idx version_override;
-
 			auto colon_pos = branch_str.find(':');
-			if (colon_pos != string::npos) {
-				parsed_branch_name = branch_str.substr(0, colon_pos);
-				version_override = StringUtil::ToUnsigned(branch_str.substr(colon_pos + 1));
-			} else {
-				parsed_branch_name = branch_str;
-			}
-
+			string parsed_branch_name = (colon_pos != string::npos) ? branch_str.substr(0, colon_pos) : branch_str;
 			auto branch_info = branch_manager.GetBranchByName(transaction, parsed_branch_name);
-			branch_id = branch_info.branch_id;
 			branch_name = branch_info.branch_name;
-
-			idx_t snapshot_id;
-			if (version_override.IsValid()) {
-				snapshot_id = version_override.GetIndex();
-			} else {
-				snapshot_id = branch_info.head_snapshot_id;
-			}
-			snapshot = DuckLakeSnapshot(snapshot_id, 0, 0, 0, branch_id);
 		} else {
 			// VERSION or TIMESTAMP - use main branch
 			fprintf(stderr, "[DEBUG] Falling through to VERSION/TIMESTAMP handler for unit: '%s'\n", unit.c_str());

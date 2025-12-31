@@ -175,8 +175,10 @@ private:
 	mutex schemas_lock;
 	//! Map of schema index -> schema
 	unordered_map<idx_t, unique_ptr<DuckLakeCatalogSet>> schemas;
-	//! Map of data file index -> table stats
-	unordered_map<idx_t, unique_ptr<DuckLakeStats>> stats;
+	//! Map of (branch_id, next_file_id) -> table stats
+	//! NOTE: We need to cache stats per branch because different branches have different
+	//! data files with different column statistics.
+	map<pair<idx_t, idx_t>, unique_ptr<DuckLakeStats>> stats;
 	//! Map of mapping index -> name map
 	DuckLakeNameMapSet name_maps;
 	//! The maximum name map index we have loaded so far

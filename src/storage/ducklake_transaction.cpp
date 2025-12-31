@@ -1847,8 +1847,22 @@ DuckLakeSnapshot DuckLakeTransaction::GetSnapshot(optional_ptr<BoundAtClause> at
 
 	// construct a struct value from the AT clause in the form of {"unit": value} (e.g. {"version": 2}
 	// this is used as a caching key for the snapshot
+	auto &unit = at_clause->Unit();
+	bool is_branch_query = StringUtil::CIEquals(unit, "branch");
+
 	child_list_t<Value> values;
 	values.push_back(make_pair(at_clause->Unit(), at_clause->GetValue()));
+
+	// For BRANCH queries, include head_snapshot_id in cache key so cache is invalidated when branch advances
+	if (is_branch_query) {
+		auto branch_str = at_clause->GetValue().DefaultCastAs(LogicalType::VARCHAR).GetValue<string>();
+		auto colon_pos = branch_str.find(':');
+		string branch_name = (colon_pos != string::npos) ? branch_str.substr(0, colon_pos) : branch_str;
+		auto &branch_manager = metadata_manager->GetBranchManager();
+		auto branch_info = branch_manager.GetBranchByName(*this, branch_name);
+		values.push_back(make_pair("head_snapshot_id", Value::BIGINT(branch_info.head_snapshot_id)));
+	}
+
 	auto snapshot_value = Value::STRUCT(std::move(values));
 
 	lock_guard<mutex> guard(snapshot_lock);
@@ -1859,12 +1873,13 @@ DuckLakeSnapshot DuckLakeTransaction::GetSnapshot(optional_ptr<BoundAtClause> at
 		fflush(stderr);
 		return entry->second;
 	}
-	// find the snapshot and cache it
+	// find the snapshot
 	fprintf(stderr, "[DEBUG DuckLakeTransaction::GetSnapshot] Calling metadata_manager->GetSnapshot\n");
 	fflush(stderr);
 	auto result_snapshot = *metadata_manager->GetSnapshot(*at_clause, bound);
-	fprintf(stderr, "[DEBUG DuckLakeTransaction::GetSnapshot] Got result_snapshot, snapshot_id: %llu\n",
-	        static_cast<unsigned long long>(result_snapshot.snapshot_id));
+	fprintf(stderr, "[DEBUG DuckLakeTransaction::GetSnapshot] Got result_snapshot, snapshot_id: %llu, next_file_id: %llu\n",
+	        static_cast<unsigned long long>(result_snapshot.snapshot_id),
+	        static_cast<unsigned long long>(result_snapshot.next_file_id));
 	fflush(stderr);
 	snapshot_cache.insert(make_pair(std::move(snapshot_value), result_snapshot));
 	return result_snapshot;

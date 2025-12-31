@@ -2651,10 +2651,12 @@ void DuckLakeMetadataManager::WriteSnapshotChanges(DuckLakeSnapshot commit_snaps
 
 SnapshotChangeInfo DuckLakeMetadataManager::GetChangesMadeAfterSnapshot(DuckLakeSnapshot start_snapshot) {
 	// get all changes made to the system after the snapshot was started
+	// NOTE: We only check for conflicts within the SAME branch. Different branches can independently
+	// make changes without causing conflicts, because each branch has its own isolated view.
 	auto result = transaction.Query(start_snapshot, R"(
 	SELECT COALESCE(STRING_AGG(changes_made), '')
 	FROM {METADATA_CATALOG}.ducklake_snapshot_changes
-	WHERE snapshot_id > {SNAPSHOT_ID}
+	WHERE branch_id = {BRANCH_ID} AND snapshot_id > {SNAPSHOT_ID}
 	)");
 	if (result->HasError()) {
 		result->GetErrorObject().Throw(
@@ -2894,22 +2896,30 @@ WHERE branch_id = %d AND snapshot_id = (
 		// Get the snapshot details for this branch
 		// Use COALESCE to fall back to parent branch's snapshot for newly created branches
 		// that haven't had any commits yet (they inherit from their parent at the fork point)
+		// For next_file_id, we need to get the MAXIMUM across the branch's own snapshots
+		// because files written to this branch accumulate over time
 		result = transaction.Query(StringUtil::Format(R"(
 SELECT
     COALESCE(own.snapshot_id, b.fork_snapshot_id) as snapshot_id,
     COALESCE(own.schema_version, parent.schema_version) as schema_version,
     COALESCE(own.next_catalog_id, parent.next_catalog_id) as next_catalog_id,
-    COALESCE(own.next_file_id, parent.next_file_id) as next_file_id
+    COALESCE(max_file.max_next_file_id, parent.next_file_id) as next_file_id
 FROM {METADATA_CATALOG}.ducklake_branch b
 LEFT JOIN (
     SELECT snapshot_id, schema_version, next_catalog_id, next_file_id
     FROM {METADATA_CATALOG}.ducklake_snapshot
     WHERE branch_id = %llu AND snapshot_id = %llu
 ) own ON true
+LEFT JOIN (
+    SELECT MAX(next_file_id) as max_next_file_id
+    FROM {METADATA_CATALOG}.ducklake_snapshot
+    WHERE branch_id = %llu
+) max_file ON true
 LEFT JOIN {METADATA_CATALOG}.ducklake_snapshot parent
     ON parent.branch_id = b.parent_branch_id AND parent.snapshot_id = b.fork_snapshot_id
 WHERE b.branch_id = %llu;)",
-		                                              branch_info.branch_id.index, snapshot_id, branch_info.branch_id.index));
+		                                              branch_info.branch_id.index, snapshot_id,
+		                                              branch_info.branch_id.index, branch_info.branch_id.index));
 		// Use the branch_id from branch_info when creating the snapshot
 		if (result->HasError()) {
 			result->GetErrorObject().Throw(StringUtil::Format(
@@ -3226,10 +3236,42 @@ void DuckLakeMetadataManager::UpdateGlobalTableStats(const DuckLakeGlobalStatsIn
 		}
 		return;
 	}
-	// stats have been initialized - update them
+	// stats have been initialized - check if this branch has its own stats row
+	// If not, we need to INSERT new stats for this branch (branch-aware stats)
+	auto check_result = transaction.Query(
+	    StringUtil::Format("SELECT 1 FROM {METADATA_CATALOG}.ducklake_table_stats WHERE branch_id = {BRANCH_ID} AND table_id = %d;",
+	                       stats.table_id.index));
+	if (check_result->HasError()) {
+		check_result->GetErrorObject().Throw("Failed to check stats existence in DuckLake: ");
+	}
+	bool branch_has_own_stats = false;
+	for (auto &row : *check_result) {
+		(void)row;
+		branch_has_own_stats = true;
+		break;
+	}
+
+	if (!branch_has_own_stats) {
+		// This branch doesn't have its own stats yet - INSERT new stats for this branch
+		auto result = transaction.Query(
+		    StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_table_stats VALUES ({BRANCH_ID}, %d, %d, %d, %d);",
+		                       stats.table_id.index, stats.record_count, stats.next_row_id, stats.table_size_bytes));
+		if (result->HasError()) {
+			result->GetErrorObject().Throw("Failed to insert branch stats information in DuckLake: ");
+		}
+
+		result = transaction.Query(StringUtil::Format(
+		    "INSERT INTO {METADATA_CATALOG}.ducklake_table_column_stats VALUES %s;", insert_column_stats_values));
+		if (result->HasError()) {
+			result->GetErrorObject().Throw("Failed to insert branch column stats information in DuckLake: ");
+		}
+		return;
+	}
+
+	// This branch has its own stats - update them (with branch filter)
 	auto result = transaction.Query(
 	    StringUtil::Format("UPDATE {METADATA_CATALOG}.ducklake_table_stats SET record_count=%d, file_size_bytes=%d, "
-	                       "next_row_id=%d WHERE table_id=%d;",
+	                       "next_row_id=%d WHERE branch_id = {BRANCH_ID} AND table_id=%d;",
 	                       stats.record_count, stats.table_size_bytes, stats.next_row_id, stats.table_id.index));
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to update stats information in DuckLake: ");
@@ -3241,7 +3283,7 @@ VALUES %s
 UPDATE {METADATA_CATALOG}.ducklake_table_column_stats
 SET contains_null=new_contains_null, contains_nan=new_contains_nan, min_value=new_min, max_value=new_max, extra_stats=new_extra_stats
 FROM new_values
-WHERE table_id=tid AND column_id=cid
+WHERE branch_id = {BRANCH_ID} AND table_id=tid AND column_id=cid
 )",
 	                                              update_column_stats_values));
 	if (result->HasError()) {
