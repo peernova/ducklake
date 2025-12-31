@@ -74,6 +74,7 @@ public:
 	void SetPartitionData(unique_ptr<DuckLakePartition> partition_data);
 	optional_ptr<DuckLakeTableStats> GetTableStats(ClientContext &context);
 	optional_ptr<DuckLakeTableStats> GetTableStats(DuckLakeTransaction &transaction);
+	optional_ptr<DuckLakeTableStats> GetTableStats(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot);
 
 	//! Gets the top-level not-null fields
 	case_insensitive_set_t GetNotNullFields() const;
@@ -83,6 +84,8 @@ public:
 
 public:
 	unique_ptr<BaseStatistics> GetStatistics(ClientContext &context, column_t column_id) override;
+	//! Get statistics for a specific column using a specific snapshot (for branch-aware queries)
+	unique_ptr<BaseStatistics> GetStatistics(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot, column_t column_id);
 
 	TableFunction GetScanFunction(ClientContext &context, unique_ptr<FunctionData> &bind_data) override;
 	TableFunction GetScanFunction(ClientContext &context, unique_ptr<FunctionData> &bind_data,

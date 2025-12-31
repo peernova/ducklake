@@ -129,6 +129,10 @@ DuckLakeTableEntry &DuckLakeMultiFileList::GetTable() {
 	return read_info.table;
 }
 
+DuckLakeFunctionInfo &DuckLakeMultiFileList::GetReadInfo() {
+	return read_info;
+}
+
 OpenFileInfo DuckLakeMultiFileList::GetFile(idx_t i) {
 	auto &files = GetFiles();
 	if (i >= files.size()) {
@@ -326,6 +330,10 @@ void DuckLakeMultiFileList::GetFilesForTable() {
 	if (!read_info.table_id.IsTransactionLocal()) {
 		// not a transaction local table - read the file list from the metadata store
 		auto &metadata_manager = transaction.GetMetadataManager();
+		fprintf(stderr, "[DEBUG GetFilesForTable] read_info.snapshot: branch_id=%llu, snapshot_id=%llu\n",
+		        static_cast<unsigned long long>(read_info.snapshot.branch_id.index),
+		        static_cast<unsigned long long>(read_info.snapshot.snapshot_id));
+		fflush(stderr);
 		files = metadata_manager.GetFilesForTable(read_info.table, read_info.snapshot, filter_info.get());
 	}
 	if (transaction.HasDroppedFiles()) {

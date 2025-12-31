@@ -37,7 +37,10 @@ unique_ptr<BaseStatistics> DuckLakeStatistics(ClientContext &context, const Func
 		return nullptr;
 	}
 	auto &table = file_list.GetTable();
-	return table.GetStatistics(context, column_index);
+	auto &read_info = file_list.GetReadInfo();
+	auto transaction = read_info.GetTransaction();
+	// Use the snapshot from the read_info which contains the correct branch_id for AT clause queries
+	return table.GetStatistics(*transaction, read_info.snapshot, column_index);
 }
 
 BindInfo DuckLakeBindInfo(const optional_ptr<FunctionData> bind_data) {

@@ -209,6 +209,15 @@ unique_ptr<BaseStatistics> DuckLakeTableEntry::GetStatistics(ClientContext &cont
 	return GetColumnStats(field_id, *table_stats);
 }
 
+unique_ptr<BaseStatistics> DuckLakeTableEntry::GetStatistics(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot, column_t column_id) {
+	auto table_stats = GetTableStats(transaction, snapshot);
+	if (!table_stats) {
+		return nullptr;
+	}
+	auto &field_id = field_data->GetByRootIndex(PhysicalIndex(column_id));
+	return GetColumnStats(field_id, *table_stats);
+}
+
 TableFunction DuckLakeTableEntry::GetScanFunction(ClientContext &context, unique_ptr<FunctionData> &bind_data) {
 	throw InternalException("DuckLakeTableEntry::GetScanFunction called without entry lookup info");
 }
@@ -312,28 +321,16 @@ TableFunction DuckLakeTableEntry::GetScanFunction(ClientContext &context, unique
 			branch_name = "main";
 		}
 	} else {
-		// Use current snapshot (which includes the current working branch)
+		// Use current snapshot
 		snapshot = transaction.GetSnapshot();
-		branch_id = snapshot.branch_id;
-		// Get branch name from the branch manager if not on main
-		if (branch_id.index != 0) {
-			auto &metadata_manager = transaction.GetMetadataManager();
-			auto &branch_manager = metadata_manager.GetBranchManager();
-			auto branch_info = branch_manager.GetBranch(transaction, branch_id);
-			branch_name = branch_info.branch_name;
-		} else {
-			branch_name = "main";
-		}
+		branch_name = "main";
 	}
 
-	auto function_info = make_shared_ptr<DuckLakeFunctionInfo>(*this, transaction, snapshot);
-	
 	fprintf(stderr, "[DEBUG GetScanFunction] Creating function_info with snapshot: branch_id=%llu, snapshot_id=%llu\n",
 	        static_cast<unsigned long long>(snapshot.branch_id.index),
 	        static_cast<unsigned long long>(snapshot.snapshot_id));
-	fflush(stderr);	
-
-	
+	fflush(stderr);
+	auto function_info = make_shared_ptr<DuckLakeFunctionInfo>(*this, transaction, snapshot);
 	function_info->table_name = name;
 	function_info->branch_id = branch_id;
 	function_info->branch_name = branch_name;
@@ -423,6 +420,19 @@ optional_ptr<DuckLakeTableStats> DuckLakeTableEntry::GetTableStats(DuckLakeTrans
 		return nullptr;
 	}
 	return dl_catalog.GetTableStats(transaction, GetTableId());
+}
+
+optional_ptr<DuckLakeTableStats> DuckLakeTableEntry::GetTableStats(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot) {
+	if (IsTransactionLocal()) {
+		// no stats for transaction local tables
+		return nullptr;
+	}
+	auto &dl_catalog = catalog.Cast<DuckLakeCatalog>();
+	if (transaction.HasTransactionLocalChanges(GetTableId())) {
+		// no stats if there are transaction-local changes
+		return nullptr;
+	}
+	return dl_catalog.GetTableStats(transaction, snapshot, GetTableId());
 }
 
 unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &transaction, RenameTableInfo &info) {

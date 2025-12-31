@@ -45,6 +45,7 @@ public:
 	idx_t GetTotalFileCount() override;
 	unique_ptr<NodeStatistics> GetCardinality(ClientContext &context) override;
 	DuckLakeTableEntry &GetTable();
+	DuckLakeFunctionInfo &GetReadInfo();
 	unique_ptr<MultiFileList> Copy() override;
 	bool HasTransactionLocalData() const {
 		return !transaction_local_files.empty() || transaction_local_data;
