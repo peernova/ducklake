@@ -1,0 +1,20 @@
+gitGraph
+    commit id: "S0-2: CREATE sales PARTITIONED BY region"
+    commit id: "S3: INSERT US,EU,APAC data"
+    commit id: "S4: UPDATE US Widget=110"
+    commit id: "S5: DELETE EU Gadget"
+    commit id: "S6: INSERT APAC Gizmo"
+    branch no_apac
+    commit id: "S7: DELETE all APAC"
+    checkout main
+    branch latam
+    commit id: "S7: INSERT LATAM data"
+    checkout main
+    branch reorg
+    commit id: "S7: UPDATE id=1 region US→EU"
+    checkout main
+    commit id: "S7: INSERT EMEA Widget"
+    branch emea_expansion
+    commit id: "S8: INSERT EMEA Gadget,Gizmo"
+    checkout main
+    commit id: "S8: DELETE EMEA"
