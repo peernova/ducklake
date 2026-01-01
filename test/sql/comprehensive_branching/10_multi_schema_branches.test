@@ -1,0 +1,430 @@
+# name: test/sql/comprehensive_branching/10_multi_schema_branches.test
+# description: Test CREATE SCHEMA on branches with schema isolation
+# group: [comprehensive_branching]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/multi_schema.db' AS db (DATA_PATH '__TEST_DIR__/multi_schema_data', METADATA_CATALOG 'multi_schema_meta');
+
+statement ok
+USE db;
+
+# ============================================================================
+# SETUP: Create schemas and tables on main branch
+# ============================================================================
+
+statement ok
+CREATE SCHEMA sales;
+
+statement ok
+CREATE TABLE sales.orders (
+    order_id INT,
+    customer VARCHAR,
+    amount DECIMAL(10,2)
+);
+
+statement ok
+INSERT INTO sales.orders VALUES (1, 'Alice', 100.00), (2, 'Bob', 200.00);
+
+statement ok
+CREATE SCHEMA inventory;
+
+statement ok
+CREATE TABLE inventory.products (
+    product_id INT,
+    name VARCHAR,
+    stock INT
+);
+
+statement ok
+INSERT INTO inventory.products VALUES (1, 'Widget', 50), (2, 'Gadget', 30);
+
+# Verify main has: main, sales, inventory
+query I rowsort
+SELECT schema_name FROM information_schema.schemata WHERE catalog_name = 'db' AND schema_name NOT IN ('information_schema', 'pg_catalog');
+----
+inventory
+main
+sales
+
+# ============================================================================
+# TEST 1: Create new schema on feature branch - should be isolated
+# ============================================================================
+
+statement ok
+CALL ducklake_create_branch('db', 'feature');
+
+statement ok
+CALL ducklake_use_branch('db', 'feature');
+
+# Create analytics schema only on feature branch
+statement ok
+CREATE SCHEMA analytics;
+
+statement ok
+CREATE TABLE analytics.metrics (
+    metric_name VARCHAR,
+    value DECIMAL(10,2)
+);
+
+statement ok
+INSERT INTO analytics.metrics VALUES ('revenue', 1500.00), ('orders', 3.00);
+
+# Feature branch should see: main, sales, inventory, analytics
+query I rowsort
+SELECT schema_name FROM information_schema.schemata WHERE catalog_name = 'db' AND schema_name NOT IN ('information_schema', 'pg_catalog');
+----
+analytics
+inventory
+main
+sales
+
+# Verify analytics table has data
+query TR
+SELECT * FROM analytics.metrics ORDER BY metric_name;
+----
+orders	3.00
+revenue	1500.00
+
+# Switch back to main
+statement ok
+CALL ducklake_use_branch('db', 'main');
+
+# Main should NOT see analytics schema
+query I rowsort
+SELECT schema_name FROM information_schema.schemata WHERE catalog_name = 'db' AND schema_name NOT IN ('information_schema', 'pg_catalog');
+----
+inventory
+main
+sales
+
+# Analytics table should not exist on main
+statement error
+SELECT * FROM analytics.metrics;
+----
+Catalog Error
+
+# ============================================================================
+# TEST 2: Create same-named table in existing schema on branch
+# ============================================================================
+
+# Create reporting schema on main
+statement ok
+CREATE SCHEMA reporting;
+
+statement ok
+CREATE TABLE reporting.summary (
+    report_date DATE,
+    total_sales DECIMAL(10,2)
+);
+
+statement ok
+INSERT INTO reporting.summary VALUES ('2024-01-01', 5000.00);
+
+# Create second branch from main (after reporting exists)
+statement ok
+CALL ducklake_create_branch('db', 'alternate');
+
+statement ok
+CALL ducklake_use_branch('db', 'alternate');
+
+# On alternate branch, add different table to reporting schema
+statement ok
+CREATE TABLE reporting.details (
+    detail_id INT,
+    description VARCHAR
+);
+
+statement ok
+INSERT INTO reporting.details VALUES (1, 'First detail'), (2, 'Second detail');
+
+# Alternate should see both tables in reporting
+query I
+SELECT COUNT(*) FROM reporting.summary;
+----
+1
+
+query I
+SELECT COUNT(*) FROM reporting.details;
+----
+2
+
+# Switch to main - should only see summary, not details
+statement ok
+CALL ducklake_use_branch('db', 'main');
+
+query I
+SELECT COUNT(*) FROM reporting.summary;
+----
+1
+
+statement error
+SELECT * FROM reporting.details;
+----
+Catalog Error
+
+# ============================================================================
+# TEST 3: Deeply nested branches with schemas
+# ============================================================================
+
+statement ok
+CALL ducklake_create_branch('db', 'level1');
+
+statement ok
+CALL ducklake_use_branch('db', 'level1');
+
+statement ok
+CREATE SCHEMA level1_schema;
+
+statement ok
+CREATE TABLE level1_schema.data (id INT);
+
+statement ok
+INSERT INTO level1_schema.data VALUES (1);
+
+# Create level2 from level1
+statement ok
+CALL ducklake_create_branch('db', 'level2');
+
+statement ok
+CALL ducklake_use_branch('db', 'level2');
+
+statement ok
+CREATE SCHEMA level2_schema;
+
+statement ok
+CREATE TABLE level2_schema.data (id INT);
+
+statement ok
+INSERT INTO level2_schema.data VALUES (2);
+
+# Level2 should see: main, sales, inventory, reporting, level1_schema, level2_schema
+query I rowsort
+SELECT schema_name FROM information_schema.schemata WHERE catalog_name = 'db' AND schema_name NOT IN ('information_schema', 'pg_catalog');
+----
+inventory
+level1_schema
+level2_schema
+main
+reporting
+sales
+
+# Can access tables from all ancestor schemas
+query III
+SELECT * FROM sales.orders WHERE order_id = 1;
+----
+1	Alice	100.00
+
+query I
+SELECT * FROM level1_schema.data;
+----
+1
+
+query I
+SELECT * FROM level2_schema.data;
+----
+2
+
+# Level1 should NOT see level2_schema
+statement ok
+CALL ducklake_use_branch('db', 'level1');
+
+query I rowsort
+SELECT schema_name FROM information_schema.schemata WHERE catalog_name = 'db' AND schema_name NOT IN ('information_schema', 'pg_catalog');
+----
+inventory
+level1_schema
+main
+reporting
+sales
+
+statement error
+SELECT * FROM level2_schema.data;
+----
+Catalog Error
+
+# Main should not see level1_schema or level2_schema
+statement ok
+CALL ducklake_use_branch('db', 'main');
+
+query I rowsort
+SELECT schema_name FROM information_schema.schemata WHERE catalog_name = 'db' AND schema_name NOT IN ('information_schema', 'pg_catalog');
+----
+inventory
+main
+reporting
+sales
+
+statement error
+SELECT * FROM level1_schema.data;
+----
+Catalog Error
+
+# ============================================================================
+# TEST 4: Schema isolation after parent branch adds schema post-fork
+# ============================================================================
+
+# Create a branch before adding a new schema to main
+statement ok
+CALL ducklake_create_branch('db', 'frozen');
+
+# Now add new schema to main
+statement ok
+CREATE SCHEMA late_schema;
+
+statement ok
+CREATE TABLE late_schema.items (id INT);
+
+statement ok
+INSERT INTO late_schema.items VALUES (100);
+
+# Main sees late_schema
+query I rowsort
+SELECT schema_name FROM information_schema.schemata WHERE catalog_name = 'db' AND schema_name NOT IN ('information_schema', 'pg_catalog');
+----
+inventory
+late_schema
+main
+reporting
+sales
+
+# Frozen branch should NOT see late_schema (forked before it was created)
+statement ok
+CALL ducklake_use_branch('db', 'frozen');
+
+query I rowsort
+SELECT schema_name FROM information_schema.schemata WHERE catalog_name = 'db' AND schema_name NOT IN ('information_schema', 'pg_catalog');
+----
+inventory
+main
+reporting
+sales
+
+statement error
+SELECT * FROM late_schema.items;
+----
+Catalog Error
+
+# ============================================================================
+# TEST 5: Tables with same name in different schemas across branches
+# ============================================================================
+
+statement ok
+CALL ducklake_use_branch('db', 'main');
+
+statement ok
+CREATE TABLE sales.customers (id INT, name VARCHAR);
+
+statement ok
+INSERT INTO sales.customers VALUES (1, 'Main Customer');
+
+statement ok
+CALL ducklake_create_branch('db', 'customers_branch');
+
+statement ok
+CALL ducklake_use_branch('db', 'customers_branch');
+
+# Create customers table in inventory schema (different schema, same table name)
+statement ok
+CREATE TABLE inventory.customers (id INT, supplier VARCHAR);
+
+statement ok
+INSERT INTO inventory.customers VALUES (1, 'Branch Supplier');
+
+# Both tables exist with different data
+query IT
+SELECT * FROM sales.customers;
+----
+1	Main Customer
+
+query IT
+SELECT * FROM inventory.customers;
+----
+1	Branch Supplier
+
+# Main only has sales.customers, not inventory.customers
+statement ok
+CALL ducklake_use_branch('db', 'main');
+
+query IT
+SELECT * FROM sales.customers;
+----
+1	Main Customer
+
+statement error
+SELECT * FROM inventory.customers;
+----
+Catalog Error
+
+# ============================================================================
+# TEST 6: Alter table in schema on branch
+# ============================================================================
+
+statement ok
+CALL ducklake_create_branch('db', 'alter_test');
+
+statement ok
+CALL ducklake_use_branch('db', 'alter_test');
+
+# Add column to inventory.products on this branch
+statement ok
+ALTER TABLE inventory.products ADD COLUMN price DECIMAL(10,2) DEFAULT 0.00;
+
+statement ok
+UPDATE inventory.products SET price = 10.00 WHERE product_id = 1;
+
+# Verify branch has price column
+query ITIR
+SELECT product_id, name, stock, price FROM inventory.products ORDER BY product_id;
+----
+1	Widget	50	10.00
+2	Gadget	30	0.00
+
+# Main does NOT have price column
+statement ok
+CALL ducklake_use_branch('db', 'main');
+
+query ITI
+SELECT product_id, name, stock FROM inventory.products ORDER BY product_id;
+----
+1	Widget	50
+2	Gadget	30
+
+# ============================================================================
+# TEST 7: Cross-schema joins on branches
+# ============================================================================
+
+statement ok
+CALL ducklake_use_branch('db', 'feature');
+
+# Join across schemas (analytics from this branch, sales from parent)
+query TR
+SELECT m.metric_name, o.amount
+FROM analytics.metrics m
+CROSS JOIN sales.orders o
+WHERE m.metric_name = 'revenue' AND o.order_id = 1;
+----
+revenue	100.00
+
+# ============================================================================
+# TEST 8: Time travel to schema-specific snapshots
+# ============================================================================
+
+statement ok
+CALL ducklake_use_branch('db', 'main');
+
+# Main's analytics should fail (exists only on feature branch)
+statement error
+SELECT * FROM analytics.metrics AT (BRANCH => 'main');
+----
+Catalog Error
+
+# But can access analytics via feature branch time travel
+query TR
+SELECT * FROM analytics.metrics AT (BRANCH => 'feature') ORDER BY metric_name;
+----
+orders	3.00
+revenue	1500.00

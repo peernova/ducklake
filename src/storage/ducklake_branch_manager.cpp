@@ -92,7 +92,25 @@ CreateBranchResult DuckLakeBranchManager::CreateBranch(DuckLakeTransaction &tran
 	                       "WHERE branch_id = %lld",
 	                       NumericCast<int64_t>(new_branch_id), NumericCast<int64_t>(input.parent_branch_id.index)));
 
-	// 9. Invalidate cache
+	// 9. Copy parent's table deletions (so child inherits deleted tables from ancestors)
+	transaction.Query(
+	    StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_branch_table_deletion "
+	                       "(branch_id, ancestor_branch_id, table_id, deleted_at_snapshot) "
+	                       "SELECT %lld, ancestor_branch_id, table_id, deleted_at_snapshot "
+	                       "FROM {METADATA_CATALOG}.ducklake_branch_table_deletion "
+	                       "WHERE branch_id = %lld",
+	                       NumericCast<int64_t>(new_branch_id), NumericCast<int64_t>(input.parent_branch_id.index)));
+
+	// 10. Copy parent's schema deletions (so child inherits deleted schemas from ancestors)
+	transaction.Query(
+	    StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_branch_schema_deletion "
+	                       "(branch_id, ancestor_branch_id, schema_id, deleted_at_snapshot) "
+	                       "SELECT %lld, ancestor_branch_id, schema_id, deleted_at_snapshot "
+	                       "FROM {METADATA_CATALOG}.ducklake_branch_schema_deletion "
+	                       "WHERE branch_id = %lld",
+	                       NumericCast<int64_t>(new_branch_id), NumericCast<int64_t>(input.parent_branch_id.index)));
+
+	// 11. Invalidate cache
 	InvalidateCache();
 
 	CreateBranchResult result_info;
