@@ -1,0 +1,313 @@
+# name: test/sql/comprehensive_branching/08_time_travel_per_branch.test
+# description: Branch-aware time travel with AT (BRANCH => 'branch:version') syntax
+# group: [comprehensive_branching]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/time_travel_branch.db' AS db (DATA_PATH '__TEST_DIR__/time_travel_branch_data', METADATA_CATALOG 'time_travel_branch_meta');
+
+statement ok
+USE db;
+
+# ============================================================================
+# SETUP: Create table with initial data on main
+# Snapshots:
+#   0: schema created
+#   1: table created
+#   2: INSERT initial data (Widget=10.00)
+#   3: UPDATE (Widget=15.00)
+#   4: INSERT (Thingamajig)
+#   5: DELETE (Gizmo)
+# ============================================================================
+
+statement ok
+CREATE TABLE products (
+    id INT,
+    name VARCHAR,
+    price DECIMAL(10,2),
+    category VARCHAR
+);
+
+# Snapshot 2: Insert initial data
+statement ok
+INSERT INTO products VALUES
+    (1, 'Widget', 10.00, 'tools'),
+    (2, 'Gadget', 20.00, 'electronics'),
+    (3, 'Gizmo', 30.00, 'electronics');
+
+# Snapshot 3: Update a price
+statement ok
+UPDATE products SET price = 15.00 WHERE id = 1;
+
+# Snapshot 4: Insert more data
+statement ok
+INSERT INTO products VALUES (4, 'Thingamajig', 40.00, 'misc');
+
+# Snapshot 5: Delete a row
+statement ok
+DELETE FROM products WHERE id = 3;
+
+# Verify main current state (snapshot 5)
+query ITRR rowsort
+SELECT id, name, price, category FROM products ORDER BY id;
+----
+1	Widget	15.00	tools
+2	Gadget	20.00	electronics
+4	Thingamajig	40.00	misc
+
+# ============================================================================
+# TEST 1: Time travel on main branch
+# ============================================================================
+
+# Main at snapshot 2 (original prices, 3 rows)
+query ITRR rowsort
+SELECT id, name, price, category FROM products AT (BRANCH => 'main:2') ORDER BY id;
+----
+1	Widget	10.00	tools
+2	Gadget	20.00	electronics
+3	Gizmo	30.00	electronics
+
+# Main at snapshot 3 (Widget updated to 15.00)
+query ITRR rowsort
+SELECT id, name, price, category FROM products AT (BRANCH => 'main:3') ORDER BY id;
+----
+1	Widget	15.00	tools
+2	Gadget	20.00	electronics
+3	Gizmo	30.00	electronics
+
+# Main at snapshot 4 (Thingamajig added)
+query ITRR rowsort
+SELECT id, name, price, category FROM products AT (BRANCH => 'main:4') ORDER BY id;
+----
+1	Widget	15.00	tools
+2	Gadget	20.00	electronics
+3	Gizmo	30.00	electronics
+4	Thingamajig	40.00	misc
+
+# Main at snapshot 5 (Gizmo deleted) - same as current
+query ITRR rowsort
+SELECT id, name, price, category FROM products AT (BRANCH => 'main:5') ORDER BY id;
+----
+1	Widget	15.00	tools
+2	Gadget	20.00	electronics
+4	Thingamajig	40.00	misc
+
+# ============================================================================
+# TEST 2: Create child branch from main at snapshot 5, make changes
+# Feature branch snapshots (local to branch):
+#   0: fork from main:5
+#   1: INSERT Doohickey
+#   2: UPDATE Gadget price
+#   3: DELETE Thingamajig
+# ============================================================================
+
+statement ok
+CALL ducklake_create_branch('db', 'feature');
+
+statement ok
+CALL ducklake_use_branch('db', 'feature');
+
+# Feature branch at fork point (inherits main:5)
+query ITRR rowsort
+SELECT id, name, price, category FROM products ORDER BY id;
+----
+1	Widget	15.00	tools
+2	Gadget	20.00	electronics
+4	Thingamajig	40.00	misc
+
+# Make changes on feature branch
+statement ok
+INSERT INTO products VALUES (5, 'Doohickey', 50.00, 'tools');
+
+statement ok
+UPDATE products SET price = 25.00 WHERE id = 2;
+
+statement ok
+DELETE FROM products WHERE id = 4;
+
+# Feature current state
+query ITRR rowsort
+SELECT id, name, price, category FROM products ORDER BY id;
+----
+1	Widget	15.00	tools
+2	Gadget	25.00	electronics
+5	Doohickey	50.00	tools
+
+# ============================================================================
+# TEST 3: Time travel on child branch to parent's history
+# This is the key test: child can see parent's snapshots before fork
+# ============================================================================
+
+# Feature branch traveling to main's snapshot 2 (original data)
+query ITRR rowsort
+SELECT id, name, price, category FROM products AT (BRANCH => 'main:2') ORDER BY id;
+----
+1	Widget	10.00	tools
+2	Gadget	20.00	electronics
+3	Gizmo	30.00	electronics
+
+# Feature branch traveling to main's snapshot 3
+query ITRR rowsort
+SELECT id, name, price, category FROM products AT (BRANCH => 'main:3') ORDER BY id;
+----
+1	Widget	15.00	tools
+2	Gadget	20.00	electronics
+3	Gizmo	30.00	electronics
+
+# Feature branch at its own snapshot 5 (fork point = main:5)
+query ITRR rowsort
+SELECT id, name, price, category FROM products AT (BRANCH => 'feature:5') ORDER BY id;
+----
+1	Widget	15.00	tools
+2	Gadget	20.00	electronics
+4	Thingamajig	40.00	misc
+
+# Feature branch at snapshot 6 (after adding Doohickey)
+query ITRR rowsort
+SELECT id, name, price, category FROM products AT (BRANCH => 'feature:6') ORDER BY id;
+----
+1	Widget	15.00	tools
+2	Gadget	20.00	electronics
+4	Thingamajig	40.00	misc
+5	Doohickey	50.00	tools
+
+# ============================================================================
+# TEST 4: Main branch continues independently, child still sees old parent state
+# ============================================================================
+
+statement ok
+CALL ducklake_use_branch('db', 'main');
+
+# Make changes on main after feature was forked
+statement ok
+UPDATE products SET price = 99.00 WHERE id = 1;
+
+statement ok
+DELETE FROM products WHERE id = 2;
+
+# Main current state (Widget=99, no Gadget)
+query ITRR rowsort
+SELECT id, name, price, category FROM products ORDER BY id;
+----
+1	Widget	99.00	tools
+4	Thingamajig	40.00	misc
+
+# Feature branch should NOT see main's changes after fork
+statement ok
+CALL ducklake_use_branch('db', 'feature');
+
+# Feature current - still has Gadget at 25.00, Widget at 15.00
+query ITRR rowsort
+SELECT id, name, price, category FROM products ORDER BY id;
+----
+1	Widget	15.00	tools
+2	Gadget	25.00	electronics
+5	Doohickey	50.00	tools
+
+# Feature can time travel to main's current state (cross-branch)
+query ITRR rowsort
+SELECT id, name, price, category FROM products AT (BRANCH => 'main') ORDER BY id;
+----
+1	Widget	99.00	tools
+4	Thingamajig	40.00	misc
+
+# ============================================================================
+# TEST 5: Grandchild branch - time travel across 3 levels
+# ============================================================================
+
+# Create grandchild from feature
+statement ok
+CALL ducklake_create_branch('db', 'grandchild');
+
+statement ok
+CALL ducklake_use_branch('db', 'grandchild');
+
+# Grandchild inherits feature's state
+query ITRR rowsort
+SELECT id, name, price, category FROM products ORDER BY id;
+----
+1	Widget	15.00	tools
+2	Gadget	25.00	electronics
+5	Doohickey	50.00	tools
+
+# Make changes on grandchild
+statement ok
+INSERT INTO products VALUES (6, 'Whatchamacallit', 60.00, 'misc');
+
+statement ok
+UPDATE products SET price = 30.00 WHERE id = 2;
+
+# Grandchild current state
+query ITRR rowsort
+SELECT id, name, price, category FROM products ORDER BY id;
+----
+1	Widget	15.00	tools
+2	Gadget	30.00	electronics
+5	Doohickey	50.00	tools
+6	Whatchamacallit	60.00	misc
+
+# Grandchild can time travel to main's history (2 levels up)
+query ITRR rowsort
+SELECT id, name, price, category FROM products AT (BRANCH => 'main:2') ORDER BY id;
+----
+1	Widget	10.00	tools
+2	Gadget	20.00	electronics
+3	Gizmo	30.00	electronics
+
+# Grandchild can time travel to feature's history (1 level up)
+query ITRR rowsort
+SELECT id, name, price, category FROM products AT (BRANCH => 'feature:6') ORDER BY id;
+----
+1	Widget	15.00	tools
+2	Gadget	20.00	electronics
+4	Thingamajig	40.00	misc
+5	Doohickey	50.00	tools
+
+# ============================================================================
+# TEST 6: Branch isolation - parent deletes data that child forked with
+# ============================================================================
+
+statement ok
+CALL ducklake_use_branch('db', 'main');
+
+# Main deletes Widget completely (which feature still has)
+statement ok
+DELETE FROM products WHERE id = 1;
+
+# Main current state - no Widget
+query ITRR rowsort
+SELECT id, name, price, category FROM products ORDER BY id;
+----
+4	Thingamajig	40.00	misc
+
+# Feature should STILL have Widget (isolation)
+statement ok
+CALL ducklake_use_branch('db', 'feature');
+
+query ITRR rowsort
+SELECT id, name, price, category FROM products ORDER BY id;
+----
+1	Widget	15.00	tools
+2	Gadget	25.00	electronics
+5	Doohickey	50.00	tools
+
+# Feature can time travel to main's current state AFTER delete
+query ITRR rowsort
+SELECT id, name, price, category FROM products AT (BRANCH => 'main') ORDER BY id;
+----
+4	Thingamajig	40.00	misc
+
+# Grandchild also still has Widget (isolation propagates)
+statement ok
+CALL ducklake_use_branch('db', 'grandchild');
+
+query ITRR rowsort
+SELECT id, name, price, category FROM products ORDER BY id;
+----
+1	Widget	15.00	tools
+2	Gadget	30.00	electronics
+5	Doohickey	50.00	tools
+6	Whatchamacallit	60.00	misc

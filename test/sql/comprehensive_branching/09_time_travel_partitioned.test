@@ -1,0 +1,315 @@
+# name: test/sql/comprehensive_branching/09_time_travel_partitioned.test
+# description: Branch-aware time travel on partitioned tables
+# group: [comprehensive_branching]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/time_travel_partition.db' AS db (DATA_PATH '__TEST_DIR__/time_travel_partition_data', METADATA_CATALOG 'time_travel_partition_meta');
+
+statement ok
+USE db;
+
+# ============================================================================
+# SETUP: Create partitioned table with initial data on main
+# Snapshots:
+#   0: schema created
+#   1: table created
+#   2: ALTER TABLE SET PARTITIONED BY
+#   3: INSERT initial data
+#   4: UPDATE US partition
+#   5: DELETE from EU partition
+#   6: INSERT more into APAC
+# ============================================================================
+
+statement ok
+CREATE TABLE sales (
+    id INT,
+    product VARCHAR,
+    amount DECIMAL(10,2),
+    region VARCHAR
+);
+
+statement ok
+ALTER TABLE sales SET PARTITIONED BY (region);
+
+statement ok
+INSERT INTO sales VALUES
+    (1, 'Widget', 100.00, 'US'),
+    (2, 'Gadget', 200.00, 'US'),
+    (3, 'Widget', 150.00, 'EU'),
+    (4, 'Gadget', 250.00, 'EU'),
+    (5, 'Widget', 120.00, 'APAC'),
+    (6, 'Gadget', 220.00, 'APAC');
+
+statement ok
+UPDATE sales SET amount = 110.00 WHERE region = 'US' AND product = 'Widget';
+
+statement ok
+DELETE FROM sales WHERE region = 'EU' AND product = 'Gadget';
+
+statement ok
+INSERT INTO sales VALUES (7, 'Gizmo', 300.00, 'APAC');
+
+# Verify main current state (snapshot 6)
+query ITRT rowsort
+SELECT id, product, amount, region FROM sales ORDER BY id;
+----
+1	Widget	110.00	US
+2	Gadget	200.00	US
+3	Widget	150.00	EU
+5	Widget	120.00	APAC
+6	Gadget	220.00	APAC
+7	Gizmo	300.00	APAC
+
+# ============================================================================
+# TEST 1: Time travel on main - partition filtering
+# ============================================================================
+
+# Main at snapshot 3, filter by region (original data)
+query ITRT rowsort
+SELECT id, product, amount, region FROM sales AT (BRANCH => 'main:3') WHERE region = 'US' ORDER BY id;
+----
+1	Widget	100.00	US
+2	Gadget	200.00	US
+
+query ITRT rowsort
+SELECT id, product, amount, region FROM sales AT (BRANCH => 'main:3') WHERE region = 'EU' ORDER BY id;
+----
+3	Widget	150.00	EU
+4	Gadget	250.00	EU
+
+# Main at snapshot 4 (US Widget updated)
+query ITRT rowsort
+SELECT id, product, amount, region FROM sales AT (BRANCH => 'main:4') WHERE region = 'US' ORDER BY id;
+----
+1	Widget	110.00	US
+2	Gadget	200.00	US
+
+# Main at snapshot 5 (EU Gadget deleted)
+query ITRT rowsort
+SELECT id, product, amount, region FROM sales AT (BRANCH => 'main:5') WHERE region = 'EU' ORDER BY id;
+----
+3	Widget	150.00	EU
+
+# ============================================================================
+# TEST 2: Create branch, delete entire partition on branch
+# ============================================================================
+
+statement ok
+CALL ducklake_create_branch('db', 'no_apac');
+
+statement ok
+CALL ducklake_use_branch('db', 'no_apac');
+
+statement ok
+DELETE FROM sales WHERE region = 'APAC';
+
+# Verify no APAC on this branch
+query ITRT rowsort
+SELECT id, product, amount, region FROM sales ORDER BY id;
+----
+1	Widget	110.00	US
+2	Gadget	200.00	US
+3	Widget	150.00	EU
+
+# Time travel back to fork point - APAC should be there
+query ITRT rowsort
+SELECT id, product, amount, region FROM sales AT (BRANCH => 'no_apac:6') WHERE region = 'APAC' ORDER BY id;
+----
+5	Widget	120.00	APAC
+6	Gadget	220.00	APAC
+7	Gizmo	300.00	APAC
+
+# Main still has APAC (isolation)
+query ITRT rowsort
+SELECT id, product, amount, region FROM sales AT (BRANCH => 'main') WHERE region = 'APAC' ORDER BY id;
+----
+5	Widget	120.00	APAC
+6	Gadget	220.00	APAC
+7	Gizmo	300.00	APAC
+
+# ============================================================================
+# TEST 3: Create branch, add new partition
+# ============================================================================
+
+statement ok
+CALL ducklake_use_branch('db', 'main');
+
+statement ok
+CALL ducklake_create_branch('db', 'latam');
+
+statement ok
+CALL ducklake_use_branch('db', 'latam');
+
+statement ok
+INSERT INTO sales VALUES
+    (8, 'Widget', 90.00, 'LATAM'),
+    (9, 'Gadget', 180.00, 'LATAM');
+
+# Verify LATAM exists on this branch
+query ITRT rowsort
+SELECT id, product, amount, region FROM sales WHERE region = 'LATAM' ORDER BY id;
+----
+8	Widget	90.00	LATAM
+9	Gadget	180.00	LATAM
+
+# Main does NOT have LATAM
+query I
+SELECT COUNT(*) FROM sales AT (BRANCH => 'main') WHERE region = 'LATAM';
+----
+0
+
+# Time travel to before LATAM was added (fork point)
+query I
+SELECT COUNT(*) FROM sales AT (BRANCH => 'latam:6') WHERE region = 'LATAM';
+----
+0
+
+# ============================================================================
+# TEST 4: Modify partition key values on branch (move between partitions)
+# ============================================================================
+
+statement ok
+CALL ducklake_use_branch('db', 'main');
+
+statement ok
+CALL ducklake_create_branch('db', 'reorg');
+
+statement ok
+CALL ducklake_use_branch('db', 'reorg');
+
+# Move Widget from US to EU (change partition key)
+statement ok
+UPDATE sales SET region = 'EU' WHERE id = 1;
+
+# Verify the move
+query ITRT
+SELECT id, product, amount, region FROM sales WHERE id = 1;
+----
+1	Widget	110.00	EU
+
+# US partition no longer has Widget
+query I
+SELECT COUNT(*) FROM sales WHERE region = 'US' AND product = 'Widget';
+----
+0
+
+# Time travel to before the move
+query ITRT
+SELECT id, product, amount, region FROM sales AT (BRANCH => 'reorg:6') WHERE id = 1;
+----
+1	Widget	110.00	US
+
+# Main still has Widget in US
+query ITRT
+SELECT id, product, amount, region FROM sales AT (BRANCH => 'main') WHERE id = 1;
+----
+1	Widget	110.00	US
+
+# ============================================================================
+# TEST 5: Complex partition operations across branch hierarchy
+# ============================================================================
+
+statement ok
+CALL ducklake_use_branch('db', 'main');
+
+# Add EMEA partition on main
+statement ok
+INSERT INTO sales VALUES (10, 'Widget', 130.00, 'EMEA');
+
+# Create child branch
+statement ok
+CALL ducklake_create_branch('db', 'emea_expansion');
+
+statement ok
+CALL ducklake_use_branch('db', 'emea_expansion');
+
+# Expand EMEA on child
+statement ok
+INSERT INTO sales VALUES
+    (11, 'Gadget', 230.00, 'EMEA'),
+    (12, 'Gizmo', 330.00, 'EMEA');
+
+# Child has 3 EMEA rows
+query I
+SELECT COUNT(*) FROM sales WHERE region = 'EMEA';
+----
+3
+
+# Main has 1 EMEA row
+query I
+SELECT COUNT(*) FROM sales AT (BRANCH => 'main') WHERE region = 'EMEA';
+----
+1
+
+# Time travel to main before EMEA existed (snapshot 6)
+query I
+SELECT COUNT(*) FROM sales AT (BRANCH => 'main:6') WHERE region = 'EMEA';
+----
+0
+
+# Now main deletes EMEA
+statement ok
+CALL ducklake_use_branch('db', 'main');
+
+statement ok
+DELETE FROM sales WHERE region = 'EMEA';
+
+# Main has no EMEA
+query I
+SELECT COUNT(*) FROM sales WHERE region = 'EMEA';
+----
+0
+
+# Child still has EMEA (isolation)
+statement ok
+CALL ducklake_use_branch('db', 'emea_expansion');
+
+query I
+SELECT COUNT(*) FROM sales WHERE region = 'EMEA';
+----
+3
+
+# Child can time travel to see main after delete (no EMEA)
+query I
+SELECT COUNT(*) FROM sales AT (BRANCH => 'main') WHERE region = 'EMEA';
+----
+0
+
+# ============================================================================
+# TEST 6: Aggregations with time travel across partitions
+# ============================================================================
+
+statement ok
+CALL ducklake_use_branch('db', 'main');
+
+# Current totals by region on main
+query TR rowsort
+SELECT region, SUM(amount) as total FROM sales GROUP BY region ORDER BY region;
+----
+APAC	640.00
+EU	150.00
+US	310.00
+
+# Totals at snapshot 3 (before any updates/deletes)
+query TR rowsort
+SELECT region, SUM(amount) as total FROM sales AT (BRANCH => 'main:3') GROUP BY region ORDER BY region;
+----
+APAC	340.00
+EU	400.00
+US	300.00
+
+# Compare branches at same point in time
+statement ok
+CALL ducklake_use_branch('db', 'emea_expansion');
+
+query TR rowsort
+SELECT region, SUM(amount) as total FROM sales GROUP BY region ORDER BY region;
+----
+APAC	640.00
+EMEA	690.00
+EU	150.00
+US	310.00
