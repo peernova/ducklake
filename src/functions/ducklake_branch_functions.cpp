@@ -251,6 +251,42 @@ static void CreateBranchFunction(ClientContext &context, TableFunctionInput &dat
 	    "WHERE branch_id = %lld",
 	    new_branch_id, parent_branch_id));
 
+	// Copy parent's table deletions (so child inherits deleted tables from ancestors)
+	transaction.Query(StringUtil::Format(
+	    "INSERT INTO {METADATA_CATALOG}.ducklake_branch_table_deletion "
+	    "(branch_id, ancestor_branch_id, table_id, deleted_at_snapshot) "
+	    "SELECT %lld, ancestor_branch_id, table_id, deleted_at_snapshot "
+	    "FROM {METADATA_CATALOG}.ducklake_branch_table_deletion "
+	    "WHERE branch_id = %lld",
+	    new_branch_id, parent_branch_id));
+
+	// Copy parent's schema deletions (so child inherits deleted schemas from ancestors)
+	transaction.Query(StringUtil::Format(
+	    "INSERT INTO {METADATA_CATALOG}.ducklake_branch_schema_deletion "
+	    "(branch_id, ancestor_branch_id, schema_id, deleted_at_snapshot) "
+	    "SELECT %lld, ancestor_branch_id, schema_id, deleted_at_snapshot "
+	    "FROM {METADATA_CATALOG}.ducklake_branch_schema_deletion "
+	    "WHERE branch_id = %lld",
+	    new_branch_id, parent_branch_id));
+
+	// Copy parent's view deletions (so child inherits deleted views from ancestors)
+	transaction.Query(StringUtil::Format(
+	    "INSERT INTO {METADATA_CATALOG}.ducklake_branch_view_deletion "
+	    "(branch_id, ancestor_branch_id, view_id, deleted_at_snapshot) "
+	    "SELECT %lld, ancestor_branch_id, view_id, deleted_at_snapshot "
+	    "FROM {METADATA_CATALOG}.ducklake_branch_view_deletion "
+	    "WHERE branch_id = %lld",
+	    new_branch_id, parent_branch_id));
+
+	// Copy parent's macro deletions (so child inherits deleted macros from ancestors)
+	transaction.Query(StringUtil::Format(
+	    "INSERT INTO {METADATA_CATALOG}.ducklake_branch_macro_deletion "
+	    "(branch_id, ancestor_branch_id, macro_id, deleted_at_snapshot) "
+	    "SELECT %lld, ancestor_branch_id, macro_id, deleted_at_snapshot "
+	    "FROM {METADATA_CATALOG}.ducklake_branch_macro_deletion "
+	    "WHERE branch_id = %lld",
+	    new_branch_id, parent_branch_id));
+
 	// Copy parent's table stats (so child starts with same counts as parent at fork point)
 	transaction.Query(StringUtil::Format(
 	    "INSERT INTO {METADATA_CATALOG}.ducklake_table_stats "

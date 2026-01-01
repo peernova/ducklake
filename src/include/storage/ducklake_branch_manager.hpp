@@ -25,12 +25,6 @@ public:
 	explicit DuckLakeBranchManager(DuckLakeMetadataManager &metadata_manager);
 	~DuckLakeBranchManager();
 
-	//! Create a new branch from a parent branch at a specific snapshot
-	CreateBranchResult CreateBranch(DuckLakeTransaction &transaction, const CreateBranchInput &input);
-
-	//! Delete a branch (soft delete - marks as deleted)
-	void DeleteBranch(DuckLakeTransaction &transaction, BranchIndex branch_id);
-
 	//! Get branch info by ID
 	DuckLakeBranchInfo GetBranch(DuckLakeTransaction &transaction, BranchIndex branch_id);
 

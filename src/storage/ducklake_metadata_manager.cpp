@@ -118,6 +118,8 @@ CREATE TABLE {METADATA_CATALOG}.ducklake_branch_delete_file_deletion(branch_id B
 CREATE TABLE {METADATA_CATALOG}.ducklake_branch_partition_deletion(branch_id BIGINT NOT NULL, ancestor_branch_id BIGINT NOT NULL, partition_id BIGINT NOT NULL, table_id BIGINT NOT NULL, deleted_at_snapshot BIGINT NOT NULL, PRIMARY KEY (branch_id, ancestor_branch_id, partition_id));
 CREATE TABLE {METADATA_CATALOG}.ducklake_branch_table_deletion(branch_id BIGINT NOT NULL, ancestor_branch_id BIGINT NOT NULL, table_id BIGINT NOT NULL, deleted_at_snapshot BIGINT NOT NULL, PRIMARY KEY (branch_id, ancestor_branch_id, table_id));
 CREATE TABLE {METADATA_CATALOG}.ducklake_branch_schema_deletion(branch_id BIGINT NOT NULL, ancestor_branch_id BIGINT NOT NULL, schema_id BIGINT NOT NULL, deleted_at_snapshot BIGINT NOT NULL, PRIMARY KEY (branch_id, ancestor_branch_id, schema_id));
+CREATE TABLE {METADATA_CATALOG}.ducklake_branch_view_deletion(branch_id BIGINT NOT NULL, ancestor_branch_id BIGINT NOT NULL, view_id BIGINT NOT NULL, deleted_at_snapshot BIGINT NOT NULL, PRIMARY KEY (branch_id, ancestor_branch_id, view_id));
+CREATE TABLE {METADATA_CATALOG}.ducklake_branch_macro_deletion(branch_id BIGINT NOT NULL, ancestor_branch_id BIGINT NOT NULL, macro_id BIGINT NOT NULL, deleted_at_snapshot BIGINT NOT NULL, PRIMARY KEY (branch_id, ancestor_branch_id, macro_id));
 
 -- Indexes for efficient lookups
 CREATE INDEX idx_snapshot_branch ON {METADATA_CATALOG}.ducklake_snapshot(branch_id, snapshot_id);
@@ -541,6 +543,13 @@ JOIN {METADATA_CATALOG}.ducklake_branch_lineage bl ON v.branch_id = bl.ancestor_
 WHERE bl.branch_id = {BRANCH_ID}
   AND CASE WHEN v.branch_id = {BRANCH_ID} THEN {SNAPSHOT_ID} ELSE bl.max_visible_snapshot END >= v.begin_snapshot
   AND (v.end_snapshot IS NULL OR CASE WHEN v.branch_id = {BRANCH_ID} THEN {SNAPSHOT_ID} ELSE bl.max_visible_snapshot END < v.end_snapshot)
+  AND NOT EXISTS (
+      SELECT 1 FROM {METADATA_CATALOG}.ducklake_branch_view_deletion bvd
+      WHERE bvd.branch_id = {BRANCH_ID}
+        AND bvd.ancestor_branch_id = v.branch_id
+        AND bvd.view_id = v.view_id
+        AND bvd.deleted_at_snapshot <= {SNAPSHOT_ID}
+  )
 )");
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to get partition information from DuckLake: ");
@@ -579,6 +588,13 @@ JOIN {METADATA_CATALOG}.ducklake_branch_lineage bl ON m.branch_id = bl.ancestor_
 WHERE bl.branch_id = {BRANCH_ID}
   AND CASE WHEN m.branch_id = {BRANCH_ID} THEN {SNAPSHOT_ID} ELSE bl.max_visible_snapshot END >= m.begin_snapshot
   AND (m.end_snapshot IS NULL OR CASE WHEN m.branch_id = {BRANCH_ID} THEN {SNAPSHOT_ID} ELSE bl.max_visible_snapshot END < m.end_snapshot)
+  AND NOT EXISTS (
+      SELECT 1 FROM {METADATA_CATALOG}.ducklake_branch_macro_deletion bmd
+      WHERE bmd.branch_id = {BRANCH_ID}
+        AND bmd.ancestor_branch_id = m.branch_id
+        AND bmd.macro_id = m.macro_id
+        AND bmd.deleted_at_snapshot <= {SNAPSHOT_ID}
+  )
 )");
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to get macro information from DuckLake: ");
@@ -1765,11 +1781,93 @@ void DuckLakeMetadataManager::DropTables(DuckLakeSnapshot commit_snapshot, const
 }
 
 void DuckLakeMetadataManager::DropViews(DuckLakeSnapshot commit_snapshot, const set<TableIndex> &ids) {
-	FlushDrop(commit_snapshot, "ducklake_view", "view_id", ids);
+	if (ids.empty()) {
+		return;
+	}
+
+	auto dropped_id_list = GenerateIDList(ids);
+
+	// For branch-aware deletion:
+	// 1. Views that belong to the CURRENT branch -> update end_snapshot directly
+	// 2. Views that belong to ANCESTOR branches -> insert into ducklake_branch_view_deletion
+
+	// First, update views that belong to the current branch
+	auto update_current_branch_query = StringUtil::Format(
+	    R"(UPDATE {METADATA_CATALOG}.ducklake_view
+	       SET end_snapshot = {SNAPSHOT_ID}
+	       WHERE end_snapshot IS NULL
+	         AND branch_id = {BRANCH_ID}
+	         AND view_id IN (%s);)",
+	    dropped_id_list);
+	auto result = transaction.Query(commit_snapshot, update_current_branch_query);
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to update end_snapshot for current branch views in DuckLake:");
+	}
+
+	// Second, insert deletion records for views from ancestor branches
+	auto insert_deletion_records_query = StringUtil::Format(
+	    R"(INSERT INTO {METADATA_CATALOG}.ducklake_branch_view_deletion (branch_id, ancestor_branch_id, view_id, deleted_at_snapshot)
+	       SELECT {BRANCH_ID}, branch_id, view_id, {SNAPSHOT_ID}
+	       FROM {METADATA_CATALOG}.ducklake_view
+	       WHERE branch_id != {BRANCH_ID}
+	         AND view_id IN (%s)
+	         AND end_snapshot IS NULL
+	         AND NOT EXISTS (
+	             SELECT 1 FROM {METADATA_CATALOG}.ducklake_branch_view_deletion bvd
+	             WHERE bvd.branch_id = {BRANCH_ID}
+	               AND bvd.ancestor_branch_id = ducklake_view.branch_id
+	               AND bvd.view_id = ducklake_view.view_id
+	         );)",
+	    dropped_id_list);
+	result = transaction.Query(commit_snapshot, insert_deletion_records_query);
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to insert branch view deletion records in DuckLake:");
+	}
 }
 
 void DuckLakeMetadataManager::DropMacros(DuckLakeSnapshot commit_snapshot, const set<MacroIndex> &ids) {
-	FlushDrop(commit_snapshot, "ducklake_macro", "macro_id", ids);
+	if (ids.empty()) {
+		return;
+	}
+
+	auto dropped_id_list = GenerateIDList(ids);
+
+	// For branch-aware deletion:
+	// 1. Macros that belong to the CURRENT branch -> update end_snapshot directly
+	// 2. Macros that belong to ANCESTOR branches -> insert into ducklake_branch_macro_deletion
+
+	// First, update macros that belong to the current branch
+	auto update_current_branch_query = StringUtil::Format(
+	    R"(UPDATE {METADATA_CATALOG}.ducklake_macro
+	       SET end_snapshot = {SNAPSHOT_ID}
+	       WHERE end_snapshot IS NULL
+	         AND branch_id = {BRANCH_ID}
+	         AND macro_id IN (%s);)",
+	    dropped_id_list);
+	auto result = transaction.Query(commit_snapshot, update_current_branch_query);
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to update end_snapshot for current branch macros in DuckLake:");
+	}
+
+	// Second, insert deletion records for macros from ancestor branches
+	auto insert_deletion_records_query = StringUtil::Format(
+	    R"(INSERT INTO {METADATA_CATALOG}.ducklake_branch_macro_deletion (branch_id, ancestor_branch_id, macro_id, deleted_at_snapshot)
+	       SELECT {BRANCH_ID}, branch_id, macro_id, {SNAPSHOT_ID}
+	       FROM {METADATA_CATALOG}.ducklake_macro
+	       WHERE branch_id != {BRANCH_ID}
+	         AND macro_id IN (%s)
+	         AND end_snapshot IS NULL
+	         AND NOT EXISTS (
+	             SELECT 1 FROM {METADATA_CATALOG}.ducklake_branch_macro_deletion bmd
+	             WHERE bmd.branch_id = {BRANCH_ID}
+	               AND bmd.ancestor_branch_id = ducklake_macro.branch_id
+	               AND bmd.macro_id = ducklake_macro.macro_id
+	         );)",
+	    dropped_id_list);
+	result = transaction.Query(commit_snapshot, insert_deletion_records_query);
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to insert branch macro deletion records in DuckLake:");
+	}
 }
 
 void DuckLakeMetadataManager::WriteNewSchemas(DuckLakeSnapshot commit_snapshot,

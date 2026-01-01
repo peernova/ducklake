@@ -1,0 +1,228 @@
+# name: test/sql/comprehensive_branching/07_drop_schema_views.test
+# description: Test DROP SCHEMA CASCADE makes views inaccessible on branches
+# group: [comprehensive_branching]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/drop_schema_views.db' AS db (DATA_PATH '__TEST_DIR__/drop_schema_views_data');
+
+statement ok
+USE db;
+
+# ============================================================================
+# SETUP: Create schema with tables and views on main
+# ============================================================================
+
+statement ok
+CREATE SCHEMA reports;
+
+statement ok
+CREATE TABLE reports.sales (id INT, amount INT, region VARCHAR);
+
+statement ok
+INSERT INTO reports.sales VALUES (1, 100, 'North'), (2, 200, 'South'), (3, 150, 'North');
+
+statement ok
+CREATE TABLE reports.customers (id INT, name VARCHAR, region VARCHAR);
+
+statement ok
+INSERT INTO reports.customers VALUES (1, 'Alice', 'North'), (2, 'Bob', 'South');
+
+# Create views in the schema
+statement ok
+CREATE VIEW reports.sales_summary AS SELECT region, SUM(amount) as total FROM reports.sales GROUP BY region;
+
+statement ok
+CREATE VIEW reports.customer_sales AS
+SELECT c.name, s.amount
+FROM reports.customers c
+JOIN reports.sales s ON c.region = s.region;
+
+# Verify views work on main
+query TI rowsort
+SELECT * FROM reports.sales_summary;
+----
+North	250
+South	200
+
+query TI rowsort
+SELECT * FROM reports.customer_sales;
+----
+Alice	100
+Alice	150
+Bob	200
+
+# ============================================================================
+# TEST 1: Create branch and drop schema - views should be inaccessible
+# ============================================================================
+
+statement ok
+CALL ducklake_create_branch('db', 'feature');
+
+statement ok
+CALL ducklake_use_branch('db', 'feature');
+
+# Views still work on feature branch before drop
+query TI rowsort
+SELECT * FROM reports.sales_summary;
+----
+North	250
+South	200
+
+# Drop the schema on feature branch
+statement ok
+DROP SCHEMA reports CASCADE;
+
+# Views should be inaccessible on feature branch
+statement error
+SELECT * FROM reports.sales_summary;
+----
+Catalog Error
+
+statement error
+SELECT * FROM reports.customer_sales;
+----
+Catalog Error
+
+# Tables should also be inaccessible
+statement error
+SELECT * FROM reports.sales;
+----
+Catalog Error
+
+statement error
+SELECT * FROM reports.customers;
+----
+Catalog Error
+
+# ============================================================================
+# TEST 2: Main branch should still have everything intact
+# ============================================================================
+
+statement ok
+CALL ducklake_use_branch('db', 'main');
+
+# Views still work on main
+query TI rowsort
+SELECT * FROM reports.sales_summary;
+----
+North	250
+South	200
+
+query TI rowsort
+SELECT * FROM reports.customer_sales;
+----
+Alice	100
+Alice	150
+Bob	200
+
+# Tables still work on main
+query III
+SELECT * FROM reports.sales ORDER BY id;
+----
+1	100	North
+2	200	South
+3	150	North
+
+# ============================================================================
+# TEST 3: Create child branch from feature - should inherit dropped state
+# ============================================================================
+
+statement ok
+CALL ducklake_use_branch('db', 'feature');
+
+statement ok
+CALL ducklake_create_branch('db', 'child_of_feature');
+
+statement ok
+CALL ducklake_use_branch('db', 'child_of_feature');
+
+# Child should inherit that schema/views are dropped
+statement error
+SELECT * FROM reports.sales_summary;
+----
+Catalog Error
+
+statement error
+SELECT * FROM reports.sales;
+----
+Catalog Error
+
+# ============================================================================
+# TEST 4: Sibling branch should still have views
+# ============================================================================
+
+statement ok
+CALL ducklake_use_branch('db', 'main');
+
+statement ok
+CALL ducklake_create_branch('db', 'sibling');
+
+statement ok
+CALL ducklake_use_branch('db', 'sibling');
+
+# Sibling should have views (branched from main, not feature)
+query TI rowsort
+SELECT * FROM reports.sales_summary;
+----
+North	250
+South	200
+
+# ============================================================================
+# TEST 5: Time travel - access views from main while on feature
+# ============================================================================
+
+statement ok
+CALL ducklake_use_branch('db', 'feature');
+
+# Can still access via time travel to main branch
+query TI rowsort
+SELECT * FROM reports.sales_summary AT (BRANCH => 'main');
+----
+North	250
+South	200
+
+# ============================================================================
+# TEST 6: Drop view independently on branch
+# ============================================================================
+
+statement ok
+CALL ducklake_use_branch('db', 'sibling');
+
+# Drop just one view
+statement ok
+DROP VIEW reports.sales_summary;
+
+# That view should be gone
+statement error
+SELECT * FROM reports.sales_summary;
+----
+Catalog Error
+
+# But other view still works
+query TI rowsort
+SELECT * FROM reports.customer_sales;
+----
+Alice	100
+Alice	150
+Bob	200
+
+# Main should still have both views
+statement ok
+CALL ducklake_use_branch('db', 'main');
+
+query TI rowsort
+SELECT * FROM reports.sales_summary;
+----
+North	250
+South	200
+
+query TI rowsort
+SELECT * FROM reports.customer_sales;
+----
+Alice	100
+Alice	150
+Bob	200
