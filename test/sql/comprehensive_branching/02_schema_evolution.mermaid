@@ -1,0 +1,25 @@
+gitGraph
+    commit id: "CREATE TABLE employees"
+    commit id: "INSERT 3 rows"
+    branch add_col_branch
+    commit id: "ADD COLUMN department"
+    commit id: "INSERT id=4 Diana"
+    branch child_schema_branch
+    commit id: "ADD COLUMN level"
+    commit id: "UPDATE levels"
+    branch grandchild_schema_branch
+    commit id: "DROP COLUMN department"
+    commit id: "ADD COLUMN manager_id"
+    commit id: "UPDATE manager_id"
+    checkout main
+    branch drop_col_branch
+    commit id: "DROP COLUMN salary"
+    checkout main
+    branch rename_col_branch
+    commit id: "RENAME salary to compensation"
+    checkout main
+    branch multi_schema_branch
+    commit id: "ADD COLUMN email"
+    commit id: "ADD COLUMN hire_date"
+    commit id: "UPDATE email"
+    commit id: "INSERT id=5 Eve"

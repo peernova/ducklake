@@ -1,0 +1,561 @@
+# name: test/sql/branching/test_branch_partition_isolation.test
+# description: Test partition isolation between branches - DML operations on child branches
+# group: [branching]
+# Tests: DELETE isolation, repartitioning, ADD/DROP COLUMN, TRUNCATE, nested branches
+
+require ducklake
+
+require parquet
+
+statement ok
+LOAD '/Users/nareshbalusu/Downloads/claude/ducklake/ducklake_branching/postgres_scanner/build/release/extension/postgres_scanner/postgres_scanner.duckdb_extension';
+
+# Setup: Create DuckLake with file-based metadata
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/part_iso.db' AS t (DATA_PATH '__TEST_DIR__/part_iso_data', METADATA_CATALOG 'part_iso_meta');
+
+statement ok
+USE t;
+
+# ============================================================================
+# SETUP: Create partitioned table with initial data on main
+# ============================================================================
+
+statement ok
+CREATE TABLE sales (
+    id INT,
+    region VARCHAR,
+    amount INT
+);
+
+statement ok
+ALTER TABLE sales SET PARTITIONED BY (region);
+
+statement ok
+INSERT INTO sales VALUES 
+    (1, 'US', 100),
+    (2, 'US', 200),
+    (3, 'EU', 300),
+    (4, 'EU', 400),
+    (5, 'ASIA', 500);
+
+query I
+SELECT COUNT(*) FROM sales AT (BRANCH => 'main');
+----
+5
+
+query TI
+SELECT region, COUNT(*) as cnt FROM sales AT (BRANCH => 'main') GROUP BY region ORDER BY region;
+----
+ASIA	1
+EU	2
+US	2
+
+# ============================================================================
+# TEST 1: DELETE on child branch - should not affect parent
+# ============================================================================
+
+statement ok
+CALL ducklake_create_branch('t', 'child1');
+
+statement ok
+CALL ducklake_use_branch('t', 'child1');
+
+# Delete entire EU partition on child
+statement ok
+DELETE FROM sales WHERE region = 'EU';
+
+# child1 should have 3 rows (no EU)
+query I
+SELECT COUNT(*) FROM sales;
+----
+3
+
+query TI
+SELECT region, COUNT(*) as cnt FROM sales GROUP BY region ORDER BY region;
+----
+ASIA	1
+US	2
+
+# Switch back to main - should still have 5 rows including EU
+statement ok
+CALL ducklake_use_branch('t', 'main');
+
+query I
+SELECT COUNT(*) FROM sales;
+----
+5
+
+query TI
+SELECT region, COUNT(*) as cnt FROM sales GROUP BY region ORDER BY region;
+----
+ASIA	1
+EU	2
+US	2
+
+# ============================================================================
+# TEST 2: INSERT on child branch - should not affect parent
+# ============================================================================
+
+statement ok
+CALL ducklake_use_branch('t', 'child1');
+
+statement ok
+INSERT INTO sales VALUES 
+    (6, 'EU', 600),
+    (7, 'EU', 700),
+    (8, 'APAC', 800),
+    (9, 'APAC', 900);
+
+# child1 should have 7 rows
+query I
+SELECT COUNT(*) FROM sales;
+----
+7
+
+query TI
+SELECT region, COUNT(*) as cnt FROM sales GROUP BY region ORDER BY region;
+----
+APAC	2
+ASIA	1
+EU	2
+US	2
+
+# main should still have 5 rows
+statement ok
+CALL ducklake_use_branch('t', 'main');
+
+query I
+SELECT COUNT(*) FROM sales;
+----
+5
+
+# main should NOT have APAC
+query I
+SELECT COUNT(*) FROM sales WHERE region = 'APAC';
+----
+0
+
+# ============================================================================
+# TEST 3: Repartition on child branch - should not affect parent
+# ============================================================================
+
+statement ok
+CALL ducklake_use_branch('t', 'child1');
+
+statement ok
+ALTER TABLE sales SET PARTITIONED BY (id);
+
+# child1 data should still be intact after repartition
+query I
+SELECT COUNT(*) FROM sales;
+----
+7
+
+# Delete APAC data on child
+statement ok
+DELETE FROM sales WHERE region = 'APAC';
+
+query I
+SELECT COUNT(*) FROM sales;
+----
+5
+
+query TI
+SELECT region, COUNT(*) as cnt FROM sales GROUP BY region ORDER BY region;
+----
+ASIA	1
+EU	2
+US	2
+
+# main should still be partitioned by region and have original data
+statement ok
+CALL ducklake_use_branch('t', 'main');
+
+query I
+SELECT COUNT(*) FROM sales;
+----
+5
+
+# ============================================================================
+# TEST 4: Sibling branch - isolated from both main and child1
+# ============================================================================
+
+statement ok
+CALL ducklake_use_branch('t', 'main');
+
+statement ok
+CALL ducklake_create_branch('t', 'child2');
+
+statement ok
+CALL ducklake_use_branch('t', 'child2');
+
+# child2 should see main's data (5 rows with EU)
+query I
+SELECT COUNT(*) FROM sales;
+----
+5
+
+query TI
+SELECT region, COUNT(*) as cnt FROM sales GROUP BY region ORDER BY region;
+----
+ASIA	1
+EU	2
+US	2
+
+# Delete ASIA on child2
+statement ok
+DELETE FROM sales WHERE region = 'ASIA';
+
+# Insert AFRICA on child2
+statement ok
+INSERT INTO sales VALUES (10, 'AFRICA', 1000);
+
+query TI
+SELECT region, COUNT(*) as cnt FROM sales GROUP BY region ORDER BY region;
+----
+AFRICA	1
+EU	2
+US	2
+
+# Verify main unaffected
+statement ok
+CALL ducklake_use_branch('t', 'main');
+
+query TI
+SELECT region, COUNT(*) as cnt FROM sales GROUP BY region ORDER BY region;
+----
+ASIA	1
+EU	2
+US	2
+
+# Verify child1 unaffected (has its own state)
+statement ok
+CALL ducklake_use_branch('t', 'child1');
+
+query TI
+SELECT region, COUNT(*) as cnt FROM sales GROUP BY region ORDER BY region;
+----
+ASIA	1
+EU	2
+US	2
+
+# ============================================================================
+# TEST 5: Grandchild branch - 3 levels deep
+# ============================================================================
+
+statement ok
+CALL ducklake_use_branch('t', 'child1');
+
+statement ok
+CALL ducklake_create_branch('t', 'grandchild1');
+
+statement ok
+CALL ducklake_use_branch('t', 'grandchild1');
+
+# grandchild1 should inherit child1's state
+query I
+SELECT COUNT(*) FROM sales;
+----
+5
+
+# Add column with default on grandchild
+statement ok
+ALTER TABLE sales ADD COLUMN status VARCHAR DEFAULT 'active';
+
+# Repartition by new column
+statement ok
+ALTER TABLE sales SET PARTITIONED BY (status);
+
+# Insert data with different status values
+statement ok
+INSERT INTO sales VALUES 
+    (11, 'LATAM', 1100, 'pending'),
+    (12, 'LATAM', 1200, 'closed');
+
+query TI
+SELECT status, COUNT(*) as cnt FROM sales GROUP BY status ORDER BY status;
+----
+active	5
+closed	1
+pending	1
+
+# Delete some data
+statement ok
+DELETE FROM sales WHERE region = 'EU';
+
+query I
+SELECT COUNT(*) FROM sales;
+----
+5
+
+# Verify child1 unaffected (no status column)
+statement ok
+CALL ducklake_use_branch('t', 'child1');
+
+query I
+SELECT COUNT(*) FROM sales;
+----
+5
+
+# Verify main unaffected
+statement ok
+CALL ducklake_use_branch('t', 'main');
+
+query I
+SELECT COUNT(*) FROM sales;
+----
+5
+
+# ============================================================================
+# TEST 6: Great-grandchild branch - 4 levels deep
+# ============================================================================
+
+statement ok
+CALL ducklake_use_branch('t', 'grandchild1');
+
+# DEBUG: Check grandchild1 state before repartition (has status column from TEST 5)
+query IIII
+SELECT id, region, amount, status FROM sales ORDER BY id;
+----
+1	US	100	active
+2	US	200	active
+5	ASIA	500	active
+11	LATAM	1100	pending
+12	LATAM	1200	closed
+
+# Repartition by region before creating great-grandchild (to drop status column later)
+statement ok
+ALTER TABLE sales SET PARTITIONED BY (region);
+
+# DEBUG: Check after repartition
+query TI
+SELECT 'after_repartition' as stage, COUNT(*) as cnt FROM sales;
+----
+after_repartition	5
+
+# Drop the status column
+statement ok
+ALTER TABLE sales DROP COLUMN status;
+
+# DEBUG: Check after drop column
+query TI
+SELECT 'after_drop_column' as stage, COUNT(*) as cnt FROM sales;
+----
+after_drop_column	5
+
+statement ok
+CALL ducklake_create_branch('t', 'greatgrandchild1');
+
+statement ok
+CALL ducklake_use_branch('t', 'greatgrandchild1');
+
+# great-grandchild inherits grandchild1's current state
+query I
+SELECT COUNT(*) FROM sales;
+----
+5
+
+# Add priority column
+statement ok
+ALTER TABLE sales ADD COLUMN priority INT DEFAULT 1;
+
+# Repartition by priority
+statement ok
+ALTER TABLE sales SET PARTITIONED BY (priority);
+
+# Insert with different priorities
+statement ok
+INSERT INTO sales VALUES 
+    (13, 'URGENT', 1300, 3),
+    (14, 'URGENT', 1400, 2);
+
+query II
+SELECT priority, COUNT(*) as cnt FROM sales GROUP BY priority ORDER BY priority;
+----
+1	5
+2	1
+3	1
+
+# Verify entire ancestry is unaffected
+statement ok
+CALL ducklake_use_branch('t', 'main');
+
+query I
+SELECT COUNT(*) FROM sales;
+----
+5
+
+statement ok
+CALL ducklake_use_branch('t', 'child1');
+
+query I
+SELECT COUNT(*) FROM sales;
+----
+5
+
+statement ok
+CALL ducklake_use_branch('t', 'grandchild1');
+
+query I
+SELECT COUNT(*) FROM sales;
+----
+5
+
+# ============================================================================
+# TEST 7: Grandchild from child2 - parallel hierarchy
+# ============================================================================
+
+statement ok
+CALL ducklake_use_branch('t', 'child2');
+
+statement ok
+CALL ducklake_create_branch('t', 'grandchild2');
+
+statement ok
+CALL ducklake_use_branch('t', 'grandchild2');
+
+# grandchild2 inherits child2's state (has AFRICA, no ASIA)
+query TI
+SELECT region, COUNT(*) as cnt FROM sales GROUP BY region ORDER BY region;
+----
+AFRICA	1
+EU	2
+US	2
+
+# Delete EU on grandchild2
+statement ok
+DELETE FROM sales WHERE region = 'EU';
+
+# Insert ANTARCTICA
+statement ok
+INSERT INTO sales VALUES (15, 'ANTARCTICA', 1500);
+
+query TI
+SELECT region, COUNT(*) as cnt FROM sales GROUP BY region ORDER BY region;
+----
+AFRICA	1
+ANTARCTICA	1
+US	2
+
+# Verify child2 unaffected
+statement ok
+CALL ducklake_use_branch('t', 'child2');
+
+query TI
+SELECT region, COUNT(*) as cnt FROM sales GROUP BY region ORDER BY region;
+----
+AFRICA	1
+EU	2
+US	2
+
+# ============================================================================
+# TEST 8: TRUNCATE on branch - should not affect parent or siblings
+# ============================================================================
+
+statement ok
+CALL ducklake_use_branch('t', 'child2');
+
+statement ok
+TRUNCATE TABLE sales;
+
+# child2 should have 0 rows
+query I
+SELECT COUNT(*) FROM sales;
+----
+0
+
+# Can insert after truncate
+statement ok
+INSERT INTO sales VALUES (20, 'RESTART', 2000);
+
+query I
+SELECT COUNT(*) FROM sales;
+----
+1
+
+# main should be unaffected
+statement ok
+CALL ducklake_use_branch('t', 'main');
+
+query I
+SELECT COUNT(*) FROM sales;
+----
+5
+
+# grandchild2 (forked from child2 before truncate) should be unaffected
+statement ok
+CALL ducklake_use_branch('t', 'grandchild2');
+
+query I
+SELECT COUNT(*) FROM sales;
+----
+4
+
+# ============================================================================
+# TEST 9: Final state verification - all branches isolated
+# ============================================================================
+
+statement ok
+CALL ducklake_use_branch('t', 'main');
+
+query I
+SELECT COUNT(*) FROM sales;
+----
+5
+
+statement ok
+CALL ducklake_use_branch('t', 'child1');
+
+query I
+SELECT COUNT(*) FROM sales;
+----
+5
+
+statement ok
+CALL ducklake_use_branch('t', 'child2');
+
+query I
+SELECT COUNT(*) FROM sales;
+----
+1
+
+statement ok
+CALL ducklake_use_branch('t', 'grandchild1');
+
+query I
+SELECT COUNT(*) FROM sales;
+----
+5
+
+statement ok
+CALL ducklake_use_branch('t', 'grandchild2');
+
+query I
+SELECT COUNT(*) FROM sales;
+----
+4
+
+statement ok
+CALL ducklake_use_branch('t', 'greatgrandchild1');
+
+query I
+SELECT COUNT(*) FROM sales;
+----
+7
+
+# ============================================================================
+# CLEANUP
+# ============================================================================
+
+statement ok
+CALL ducklake_use_branch('t', 'main');
+
+statement ok
+DROP TABLE sales;
+
+statement ok
+USE memory;
+
+statement ok
+DETACH t;

@@ -1,0 +1,410 @@
+# name: test/sql/comprehensive_branching/02_schema_evolution.test
+# description: Schema evolution across branches - ADD/DROP COLUMN, type promotion
+# group: [comprehensive_branching]
+
+require ducklake
+
+require parquet
+
+# Setup: Create DuckLake catalog
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/schema_evo.db' AS t (DATA_PATH '__TEST_DIR__/schema_evo_data');
+
+statement ok
+USE t;
+
+# ============================================================================
+# SETUP: Create table on main branch
+# ============================================================================
+
+statement ok
+CREATE TABLE employees (id INT, name VARCHAR, salary INT);
+
+statement ok
+INSERT INTO employees VALUES
+    (1, 'Alice', 50000),
+    (2, 'Bob', 60000),
+    (3, 'Charlie', 70000);
+
+query I
+SELECT COUNT(*) FROM employees;
+----
+3
+
+# ============================================================================
+# TEST 1: ADD COLUMN on branch - isolated from main
+# ============================================================================
+
+statement ok
+CALL ducklake_create_branch('t', 'add_col_branch');
+
+statement ok
+CALL ducklake_use_branch('t', 'add_col_branch');
+
+statement ok
+ALTER TABLE employees ADD COLUMN department VARCHAR DEFAULT 'Engineering';
+
+# Branch has new column
+query IITI
+SELECT id, name, department, salary FROM employees ORDER BY id;
+----
+1	Alice	Engineering	50000
+2	Bob	Engineering	60000
+3	Charlie	Engineering	70000
+
+# Insert with new column
+statement ok
+INSERT INTO employees VALUES (4, 'Diana', 80000, 'Sales');
+
+query IITI
+SELECT id, name, department, salary FROM employees WHERE id = 4;
+----
+4	Diana	Sales	80000
+
+# Main does NOT have the new column
+statement ok
+CALL ducklake_use_branch('t', 'main');
+
+query III
+SELECT id, name, salary FROM employees ORDER BY id;
+----
+1	Alice	50000
+2	Bob	60000
+3	Charlie	70000
+
+# Main should only have 3 rows
+query I
+SELECT COUNT(*) FROM employees;
+----
+3
+
+# ============================================================================
+# TEST 2: DROP COLUMN on branch - isolated from main
+# ============================================================================
+
+statement ok
+CALL ducklake_create_branch('t', 'drop_col_branch');
+
+statement ok
+CALL ducklake_use_branch('t', 'drop_col_branch');
+
+statement ok
+ALTER TABLE employees DROP COLUMN salary;
+
+# Branch has no salary column
+query IT
+SELECT id, name FROM employees ORDER BY id;
+----
+1	Alice
+2	Bob
+3	Charlie
+
+# Main still has salary column
+statement ok
+CALL ducklake_use_branch('t', 'main');
+
+query III
+SELECT id, name, salary FROM employees ORDER BY id;
+----
+1	Alice	50000
+2	Bob	60000
+3	Charlie	70000
+
+# ============================================================================
+# TEST 3: RENAME COLUMN on branch - isolated from main
+# ============================================================================
+
+statement ok
+CALL ducklake_create_branch('t', 'rename_col_branch');
+
+statement ok
+CALL ducklake_use_branch('t', 'rename_col_branch');
+
+statement ok
+ALTER TABLE employees RENAME COLUMN salary TO compensation;
+
+# Branch has renamed column
+query III
+SELECT id, name, compensation FROM employees ORDER BY id;
+----
+1	Alice	50000
+2	Bob	60000
+3	Charlie	70000
+
+# Main still has original column name
+statement ok
+CALL ducklake_use_branch('t', 'main');
+
+query III
+SELECT id, name, salary FROM employees ORDER BY id;
+----
+1	Alice	50000
+2	Bob	60000
+3	Charlie	70000
+
+# ============================================================================
+# TEST 4: Multiple schema changes on same branch
+# ============================================================================
+
+statement ok
+CALL ducklake_create_branch('t', 'multi_schema_branch');
+
+statement ok
+CALL ducklake_use_branch('t', 'multi_schema_branch');
+
+# Add email column
+statement ok
+ALTER TABLE employees ADD COLUMN email VARCHAR;
+
+# Add hire_date column with default
+statement ok
+ALTER TABLE employees ADD COLUMN hire_date DATE DEFAULT '2024-01-01';
+
+# Update some data
+statement ok
+UPDATE employees SET email = name || '@company.com';
+
+query ITIIT
+SELECT id, name, email, salary, hire_date FROM employees ORDER BY id;
+----
+1	Alice	Alice@company.com	50000	2024-01-01
+2	Bob	Bob@company.com	60000	2024-01-01
+3	Charlie	Charlie@company.com	70000	2024-01-01
+
+# Insert with new columns (column order: id, name, salary, email, hire_date)
+statement ok
+INSERT INTO employees VALUES (5, 'Eve', 90000, 'eve@company.com', '2024-06-15');
+
+query I
+SELECT COUNT(*) FROM employees;
+----
+4
+
+# Main is unchanged (only 3 columns, 3 rows)
+statement ok
+CALL ducklake_use_branch('t', 'main');
+
+query I
+SELECT COUNT(*) FROM employees;
+----
+3
+
+# ============================================================================
+# TEST 5: Schema evolution on nested branches
+# ============================================================================
+
+statement ok
+CALL ducklake_use_branch('t', 'add_col_branch');
+
+# Create child of add_col_branch
+statement ok
+CALL ducklake_create_branch('t', 'child_schema_branch');
+
+statement ok
+CALL ducklake_use_branch('t', 'child_schema_branch');
+
+# Child inherits parent's schema (has department column)
+query IITI
+SELECT id, name, department, salary FROM employees ORDER BY id;
+----
+1	Alice	Engineering	50000
+2	Bob	Engineering	60000
+3	Charlie	Engineering	70000
+4	Diana	Sales	80000
+
+# Add another column on child
+statement ok
+ALTER TABLE employees ADD COLUMN level INT DEFAULT 1;
+
+query IITII
+SELECT id, name, department, salary, level FROM employees ORDER BY id;
+----
+1	Alice	Engineering	50000	1
+2	Bob	Engineering	60000	1
+3	Charlie	Engineering	70000	1
+4	Diana	Sales	80000	1
+
+# Update levels
+statement ok
+UPDATE employees SET level = 2 WHERE id IN (2, 3);
+
+statement ok
+UPDATE employees SET level = 3 WHERE id = 4;
+
+query IITII
+SELECT id, name, department, salary, level FROM employees ORDER BY id;
+----
+1	Alice	Engineering	50000	1
+2	Bob	Engineering	60000	2
+3	Charlie	Engineering	70000	2
+4	Diana	Sales	80000	3
+
+# Parent (add_col_branch) does NOT have level column
+statement ok
+CALL ducklake_use_branch('t', 'add_col_branch');
+
+query IITI
+SELECT id, name, department, salary FROM employees ORDER BY id;
+----
+1	Alice	Engineering	50000
+2	Bob	Engineering	60000
+3	Charlie	Engineering	70000
+4	Diana	Sales	80000
+
+# Main still has original schema
+statement ok
+CALL ducklake_use_branch('t', 'main');
+
+query III
+SELECT id, name, salary FROM employees ORDER BY id;
+----
+1	Alice	50000
+2	Bob	60000
+3	Charlie	70000
+
+# ============================================================================
+# TEST 6: Schema changes with data on grandchild branch
+# ============================================================================
+
+statement ok
+CALL ducklake_use_branch('t', 'child_schema_branch');
+
+statement ok
+CALL ducklake_create_branch('t', 'grandchild_schema_branch');
+
+statement ok
+CALL ducklake_use_branch('t', 'grandchild_schema_branch');
+
+# Grandchild inherits child's schema
+query IITII
+SELECT id, name, department, salary, level FROM employees ORDER BY id;
+----
+1	Alice	Engineering	50000	1
+2	Bob	Engineering	60000	2
+3	Charlie	Engineering	70000	2
+4	Diana	Sales	80000	3
+
+# Drop department column on grandchild
+statement ok
+ALTER TABLE employees DROP COLUMN department;
+
+# Add manager_id column
+statement ok
+ALTER TABLE employees ADD COLUMN manager_id INT;
+
+statement ok
+UPDATE employees SET manager_id = 1 WHERE id > 1;
+
+query ITIII
+SELECT id, name, salary, level, manager_id FROM employees ORDER BY id;
+----
+1	Alice	50000	1	NULL
+2	Bob	60000	2	1
+3	Charlie	70000	2	1
+4	Diana	80000	3	1
+
+# Child still has department, no manager_id
+statement ok
+CALL ducklake_use_branch('t', 'child_schema_branch');
+
+query IITII
+SELECT id, name, department, salary, level FROM employees ORDER BY id;
+----
+1	Alice	Engineering	50000	1
+2	Bob	Engineering	60000	2
+3	Charlie	Engineering	70000	2
+4	Diana	Sales	80000	3
+
+# ============================================================================
+# TEST 7: Final state verification
+# ============================================================================
+
+statement ok
+CALL ducklake_use_branch('t', 'main');
+
+query I
+SELECT COUNT(*) FROM employees;
+----
+3
+
+statement ok
+CALL ducklake_use_branch('t', 'add_col_branch');
+
+query I
+SELECT COUNT(*) FROM employees;
+----
+4
+
+statement ok
+CALL ducklake_use_branch('t', 'drop_col_branch');
+
+query I
+SELECT COUNT(*) FROM employees;
+----
+3
+
+statement ok
+CALL ducklake_use_branch('t', 'rename_col_branch');
+
+query I
+SELECT COUNT(*) FROM employees;
+----
+3
+
+statement ok
+CALL ducklake_use_branch('t', 'multi_schema_branch');
+
+query I
+SELECT COUNT(*) FROM employees;
+----
+4
+
+statement ok
+CALL ducklake_use_branch('t', 'child_schema_branch');
+
+query I
+SELECT COUNT(*) FROM employees;
+----
+4
+
+statement ok
+CALL ducklake_use_branch('t', 'grandchild_schema_branch');
+
+query I
+SELECT COUNT(*) FROM employees;
+----
+4
+
+# ============================================================================
+# CLEANUP
+# ============================================================================
+
+statement ok
+CALL ducklake_use_branch('t', 'main');
+
+statement ok
+SELECT * FROM ducklake_delete_branch('t', 'grandchild_schema_branch');
+
+statement ok
+SELECT * FROM ducklake_delete_branch('t', 'child_schema_branch');
+
+statement ok
+SELECT * FROM ducklake_delete_branch('t', 'add_col_branch');
+
+statement ok
+SELECT * FROM ducklake_delete_branch('t', 'drop_col_branch');
+
+statement ok
+SELECT * FROM ducklake_delete_branch('t', 'rename_col_branch');
+
+statement ok
+SELECT * FROM ducklake_delete_branch('t', 'multi_schema_branch');
+
+statement ok
+DROP TABLE employees;
+
+statement ok
+USE memory;
+
+statement ok
+DETACH t;

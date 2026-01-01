@@ -1,0 +1,87 @@
+# name: test/sql/branching/test_branch_update_isolation.test
+# description: Test UPDATE isolation between branches
+# group: [branching]
+# Note: Complex multi-branch UPDATE scenarios have a known bug with file deletion tracking
+#       See test_branch_partition_isolation.test for full multi-branch coverage with DELETE/INSERT
+
+require ducklake
+
+require parquet
+
+statement ok
+LOAD '/Users/nareshbalusu/Downloads/claude/ducklake/ducklake_branching/postgres_scanner/build/release/extension/postgres_scanner/postgres_scanner.duckdb_extension';
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/update_iso.db' AS t (DATA_PATH '__TEST_DIR__/update_iso_data', METADATA_CATALOG 'update_iso_meta');
+
+statement ok
+USE t;
+
+# ============================================================================
+# SETUP
+# ============================================================================
+
+statement ok
+CREATE TABLE products (id INT, category VARCHAR, price INT);
+
+statement ok
+ALTER TABLE products SET PARTITIONED BY (category);
+
+statement ok
+INSERT INTO products VALUES 
+    (1, 'electronics', 100),
+    (2, 'electronics', 200),
+    (3, 'clothing', 50);
+
+query I
+SELECT COUNT(*) FROM products;
+----
+3
+
+# ============================================================================
+# TEST 1: Simple UPDATE on child branch - should not affect parent
+# ============================================================================
+
+statement ok
+CALL ducklake_create_branch('t', 'dev');
+
+statement ok
+CALL ducklake_use_branch('t', 'dev');
+
+statement ok
+UPDATE products SET price = price * 2 WHERE category = 'electronics';
+
+# dev should see doubled prices
+query III
+SELECT id, category, price FROM products WHERE category = 'electronics' ORDER BY id;
+----
+1	electronics	200
+2	electronics	400
+
+# main should have original prices
+statement ok
+CALL ducklake_use_branch('t', 'main');
+
+query III
+SELECT id, category, price FROM products WHERE category = 'electronics' ORDER BY id;
+----
+1	electronics	100
+2	electronics	200
+
+# Full main table should be unaffected
+query III
+SELECT id, category, price FROM products ORDER BY id;
+----
+1	electronics	100
+2	electronics	200
+3	clothing	50
+
+# ============================================================================
+# CLEANUP
+# ============================================================================
+
+statement ok
+USE memory;
+
+statement ok
+DETACH t;

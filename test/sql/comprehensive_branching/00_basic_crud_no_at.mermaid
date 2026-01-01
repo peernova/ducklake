@@ -1,0 +1,18 @@
+gitGraph
+    commit id: "CREATE TABLE products"
+    commit id: "INSERT ids 1-5"
+    branch feature_branch
+    commit id: "INSERT id=6"
+    commit id: "UPDATE id=1"
+    commit id: "DELETE ids 2,4"
+    commit id: "INSERT id=100"
+    branch truncate_branch
+    commit id: "TRUNCATE"
+    commit id: "INSERT id=200"
+    checkout main
+    branch multi_ops_branch
+    commit id: "INSERT id=7"
+    commit id: "UPDATE stock x2"
+    commit id: "DELETE id=5"
+    checkout main
+    commit id: "INSERT id=8"

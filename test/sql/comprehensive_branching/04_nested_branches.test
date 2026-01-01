@@ -1,0 +1,586 @@
+# name: test/sql/comprehensive_branching/04_nested_branches.test
+# description: Deep nested branch hierarchies - grandchild, great-grandchild, cousins
+# group: [comprehensive_branching]
+
+require ducklake
+
+require parquet
+
+# Setup: Create DuckLake catalog
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/nested_branches.db' AS t (DATA_PATH '__TEST_DIR__/nested_branches_data');
+
+statement ok
+USE t;
+
+# ============================================================================
+# SETUP: Create table on main branch
+# ============================================================================
+
+statement ok
+CREATE TABLE orders (
+    id INT,
+    customer VARCHAR,
+    total INT,
+    status VARCHAR
+);
+
+statement ok
+INSERT INTO orders VALUES
+    (1, 'Alice', 100, 'pending'),
+    (2, 'Bob', 200, 'shipped'),
+    (3, 'Charlie', 300, 'delivered');
+
+query I
+SELECT COUNT(*) FROM orders;
+----
+3
+
+# ============================================================================
+# TEST 1: Create deep branch hierarchy (4 levels)
+# main -> child -> grandchild -> great-grandchild
+# ============================================================================
+
+# Level 1: child branch
+statement ok
+CALL ducklake_create_branch('t', 'level1_child');
+
+statement ok
+CALL ducklake_use_branch('t', 'level1_child');
+
+statement ok
+INSERT INTO orders VALUES (4, 'Diana', 400, 'pending');
+
+query I
+SELECT COUNT(*) FROM orders;
+----
+4
+
+# Level 2: grandchild branch
+statement ok
+CALL ducklake_create_branch('t', 'level2_grandchild');
+
+statement ok
+CALL ducklake_use_branch('t', 'level2_grandchild');
+
+statement ok
+INSERT INTO orders VALUES (5, 'Eve', 500, 'pending');
+
+statement ok
+UPDATE orders SET status = 'shipped' WHERE id = 4;
+
+query I
+SELECT COUNT(*) FROM orders;
+----
+5
+
+# Level 3: great-grandchild branch
+statement ok
+CALL ducklake_create_branch('t', 'level3_greatgrand');
+
+statement ok
+CALL ducklake_use_branch('t', 'level3_greatgrand');
+
+statement ok
+INSERT INTO orders VALUES (6, 'Frank', 600, 'pending');
+
+statement ok
+DELETE FROM orders WHERE id = 1;
+
+query I
+SELECT COUNT(*) FROM orders;
+----
+5
+
+query I
+SELECT id FROM orders ORDER BY id;
+----
+2
+3
+4
+5
+6
+
+# Level 4: great-great-grandchild branch
+statement ok
+CALL ducklake_create_branch('t', 'level4_greatgreatgrand');
+
+statement ok
+CALL ducklake_use_branch('t', 'level4_greatgreatgrand');
+
+statement ok
+INSERT INTO orders VALUES (7, 'Grace', 700, 'pending'), (8, 'Henry', 800, 'pending');
+
+statement ok
+DELETE FROM orders WHERE id IN (2, 3);
+
+query I
+SELECT COUNT(*) FROM orders;
+----
+5
+
+query I
+SELECT id FROM orders ORDER BY id;
+----
+4
+5
+6
+7
+8
+
+# ============================================================================
+# TEST 2: Verify ancestor isolation - changes don't propagate up
+# ============================================================================
+
+# Check level 3 (great-grandchild) - should not see level 4 changes
+statement ok
+CALL ducklake_use_branch('t', 'level3_greatgrand');
+
+query I
+SELECT COUNT(*) FROM orders;
+----
+5
+
+query I
+SELECT id FROM orders ORDER BY id;
+----
+2
+3
+4
+5
+6
+
+# Check level 2 (grandchild) - should not see level 3 or 4 changes
+statement ok
+CALL ducklake_use_branch('t', 'level2_grandchild');
+
+query I
+SELECT COUNT(*) FROM orders;
+----
+5
+
+query I
+SELECT id FROM orders ORDER BY id;
+----
+1
+2
+3
+4
+5
+
+# Check level 1 (child) - should not see level 2, 3, or 4 changes
+statement ok
+CALL ducklake_use_branch('t', 'level1_child');
+
+query I
+SELECT COUNT(*) FROM orders;
+----
+4
+
+query I
+SELECT id FROM orders ORDER BY id;
+----
+1
+2
+3
+4
+
+# Check main - should only have original 3 rows
+statement ok
+CALL ducklake_use_branch('t', 'main');
+
+query I
+SELECT COUNT(*) FROM orders;
+----
+3
+
+query I
+SELECT id FROM orders ORDER BY id;
+----
+1
+2
+3
+
+# ============================================================================
+# TEST 3: Create sibling branches at each level (cousin branches)
+# ============================================================================
+
+# Sibling at level 1
+statement ok
+CALL ducklake_use_branch('t', 'main');
+
+statement ok
+CALL ducklake_create_branch('t', 'level1_sibling');
+
+statement ok
+CALL ducklake_use_branch('t', 'level1_sibling');
+
+statement ok
+INSERT INTO orders VALUES (100, 'Sibling1', 1000, 'special');
+
+query I
+SELECT COUNT(*) FROM orders;
+----
+4
+
+# Sibling at level 2 (cousin of level2_grandchild)
+statement ok
+CALL ducklake_use_branch('t', 'level1_child');
+
+statement ok
+CALL ducklake_create_branch('t', 'level2_cousin');
+
+statement ok
+CALL ducklake_use_branch('t', 'level2_cousin');
+
+statement ok
+INSERT INTO orders VALUES (200, 'Cousin2', 2000, 'special');
+
+statement ok
+DELETE FROM orders WHERE id = 4;
+
+query I
+SELECT COUNT(*) FROM orders;
+----
+4
+
+query I
+SELECT id FROM orders ORDER BY id;
+----
+1
+2
+3
+200
+
+# Sibling at level 3 (cousin of level3_greatgrand)
+statement ok
+CALL ducklake_use_branch('t', 'level2_grandchild');
+
+statement ok
+CALL ducklake_create_branch('t', 'level3_cousin');
+
+statement ok
+CALL ducklake_use_branch('t', 'level3_cousin');
+
+statement ok
+INSERT INTO orders VALUES (300, 'Cousin3', 3000, 'special');
+
+query I
+SELECT COUNT(*) FROM orders;
+----
+6
+
+# ============================================================================
+# TEST 4: Verify cousin isolation - cousins don't see each other's changes
+# ============================================================================
+
+# level2_grandchild should not see level2_cousin's changes
+statement ok
+CALL ducklake_use_branch('t', 'level2_grandchild');
+
+query I
+SELECT COUNT(*) FROM orders WHERE id = 200;
+----
+0
+
+query I
+SELECT COUNT(*) FROM orders WHERE id = 4;
+----
+1
+
+# level2_cousin should not see level2_grandchild's changes
+statement ok
+CALL ducklake_use_branch('t', 'level2_cousin');
+
+query I
+SELECT COUNT(*) FROM orders WHERE id = 5;
+----
+0
+
+# level3_greatgrand should not see level3_cousin's changes
+statement ok
+CALL ducklake_use_branch('t', 'level3_greatgrand');
+
+query I
+SELECT COUNT(*) FROM orders WHERE id = 300;
+----
+0
+
+# level3_cousin should not see level3_greatgrand's changes
+statement ok
+CALL ducklake_use_branch('t', 'level3_cousin');
+
+query I
+SELECT COUNT(*) FROM orders WHERE id = 6;
+----
+0
+
+# ============================================================================
+# TEST 5: AT clause verification across all branches
+# ============================================================================
+
+statement ok
+CALL ducklake_use_branch('t', 'main');
+
+# Query all branches via AT clause
+query I
+SELECT COUNT(*) FROM orders AT (BRANCH => 'main');
+----
+3
+
+query I
+SELECT COUNT(*) FROM orders AT (BRANCH => 'level1_child');
+----
+4
+
+query I
+SELECT COUNT(*) FROM orders AT (BRANCH => 'level1_sibling');
+----
+4
+
+query I
+SELECT COUNT(*) FROM orders AT (BRANCH => 'level2_grandchild');
+----
+5
+
+query I
+SELECT COUNT(*) FROM orders AT (BRANCH => 'level2_cousin');
+----
+4
+
+query I
+SELECT COUNT(*) FROM orders AT (BRANCH => 'level3_greatgrand');
+----
+5
+
+query I
+SELECT COUNT(*) FROM orders AT (BRANCH => 'level3_cousin');
+----
+6
+
+query I
+SELECT COUNT(*) FROM orders AT (BRANCH => 'level4_greatgreatgrand');
+----
+5
+
+# ============================================================================
+# TEST 6: Modify ancestor after descendants exist
+# ============================================================================
+
+# Add data to main - descendants should NOT see this
+statement ok
+CALL ducklake_use_branch('t', 'main');
+
+statement ok
+INSERT INTO orders VALUES (999, 'LateMain', 9999, 'late');
+
+query I
+SELECT COUNT(*) FROM orders;
+----
+4
+
+# Descendants forked before this insert, so they don't see it
+query I
+SELECT COUNT(*) FROM orders AT (BRANCH => 'level1_child') WHERE id = 999;
+----
+0
+
+query I
+SELECT COUNT(*) FROM orders AT (BRANCH => 'level4_greatgreatgrand') WHERE id = 999;
+----
+0
+
+# ============================================================================
+# TEST 7: Modify intermediate branch after descendants exist
+# ============================================================================
+
+statement ok
+CALL ducklake_use_branch('t', 'level2_grandchild');
+
+statement ok
+INSERT INTO orders VALUES (888, 'LateGrandchild', 8888, 'late');
+
+query I
+SELECT COUNT(*) FROM orders;
+----
+6
+
+# level3_greatgrand was forked before this insert
+query I
+SELECT COUNT(*) FROM orders AT (BRANCH => 'level3_greatgrand') WHERE id = 888;
+----
+0
+
+# level3_cousin was also forked before
+query I
+SELECT COUNT(*) FROM orders AT (BRANCH => 'level3_cousin') WHERE id = 888;
+----
+0
+
+# ============================================================================
+# TEST 8: Create new branch from deep descendant
+# ============================================================================
+
+statement ok
+CALL ducklake_use_branch('t', 'level4_greatgreatgrand');
+
+statement ok
+CALL ducklake_create_branch('t', 'level5_deepest');
+
+statement ok
+CALL ducklake_use_branch('t', 'level5_deepest');
+
+# Inherits level4's state
+query I
+SELECT COUNT(*) FROM orders;
+----
+5
+
+query I
+SELECT id FROM orders ORDER BY id;
+----
+4
+5
+6
+7
+8
+
+statement ok
+INSERT INTO orders VALUES (9, 'Deepest', 900, 'deepest');
+
+query I
+SELECT COUNT(*) FROM orders;
+----
+6
+
+# Verify level4 unaffected
+query I
+SELECT COUNT(*) FROM orders AT (BRANCH => 'level4_greatgreatgrand');
+----
+5
+
+# ============================================================================
+# TEST 9: Final state summary
+# ============================================================================
+
+# main: 4 rows (1,2,3,999)
+# level1_child: 4 rows (1,2,3,4)
+# level1_sibling: 4 rows (1,2,3,100)
+# level2_grandchild: 6 rows (1,2,3,4,5,888)
+# level2_cousin: 4 rows (1,2,3,200)
+# level3_greatgrand: 5 rows (2,3,4,5,6)
+# level3_cousin: 6 rows (1,2,3,4,5,300)
+# level4_greatgreatgrand: 5 rows (4,5,6,7,8)
+# level5_deepest: 6 rows (4,5,6,7,8,9)
+
+statement ok
+CALL ducklake_use_branch('t', 'main');
+
+query I
+SELECT COUNT(*) FROM orders;
+----
+4
+
+statement ok
+CALL ducklake_use_branch('t', 'level1_child');
+
+query I
+SELECT COUNT(*) FROM orders;
+----
+4
+
+statement ok
+CALL ducklake_use_branch('t', 'level1_sibling');
+
+query I
+SELECT COUNT(*) FROM orders;
+----
+4
+
+statement ok
+CALL ducklake_use_branch('t', 'level2_grandchild');
+
+query I
+SELECT COUNT(*) FROM orders;
+----
+6
+
+statement ok
+CALL ducklake_use_branch('t', 'level2_cousin');
+
+query I
+SELECT COUNT(*) FROM orders;
+----
+4
+
+statement ok
+CALL ducklake_use_branch('t', 'level3_greatgrand');
+
+query I
+SELECT COUNT(*) FROM orders;
+----
+5
+
+statement ok
+CALL ducklake_use_branch('t', 'level3_cousin');
+
+query I
+SELECT COUNT(*) FROM orders;
+----
+6
+
+statement ok
+CALL ducklake_use_branch('t', 'level4_greatgreatgrand');
+
+query I
+SELECT COUNT(*) FROM orders;
+----
+5
+
+statement ok
+CALL ducklake_use_branch('t', 'level5_deepest');
+
+query I
+SELECT COUNT(*) FROM orders;
+----
+6
+
+# ============================================================================
+# CLEANUP - delete from leaves to root
+# ============================================================================
+
+statement ok
+CALL ducklake_use_branch('t', 'main');
+
+statement ok
+SELECT * FROM ducklake_delete_branch('t', 'level5_deepest');
+
+statement ok
+SELECT * FROM ducklake_delete_branch('t', 'level4_greatgreatgrand');
+
+statement ok
+SELECT * FROM ducklake_delete_branch('t', 'level3_greatgrand');
+
+statement ok
+SELECT * FROM ducklake_delete_branch('t', 'level3_cousin');
+
+statement ok
+SELECT * FROM ducklake_delete_branch('t', 'level2_grandchild');
+
+statement ok
+SELECT * FROM ducklake_delete_branch('t', 'level2_cousin');
+
+statement ok
+SELECT * FROM ducklake_delete_branch('t', 'level1_child');
+
+statement ok
+SELECT * FROM ducklake_delete_branch('t', 'level1_sibling');
+
+statement ok
+DROP TABLE orders;
+
+statement ok
+USE memory;
+
+statement ok
+DETACH t;

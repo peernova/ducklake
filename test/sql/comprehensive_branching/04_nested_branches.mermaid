@@ -1,0 +1,29 @@
+gitGraph
+    commit id: "CREATE TABLE orders"
+    commit id: "INSERT ids 1-3"
+    branch level1_child
+    commit id: "INSERT id=4"
+    branch level2_grandchild
+    commit id: "INSERT id=5"
+    commit id: "UPDATE id=4 status"
+    commit id: "INSERT id=888 late"
+    branch level3_greatgrand
+    commit id: "INSERT id=6"
+    commit id: "DELETE id=1"
+    branch level4_greatgreatgrand
+    commit id: "INSERT ids 7,8"
+    commit id: "DELETE ids 2,3"
+    branch level5_deepest
+    commit id: "INSERT id=9"
+    checkout level2_grandchild
+    branch level3_cousin
+    commit id: "INSERT id=300"
+    checkout level1_child
+    branch level2_cousin
+    commit id: "INSERT id=200"
+    commit id: "DELETE id=4"
+    checkout main
+    branch level1_sibling
+    commit id: "INSERT id=100"
+    checkout main
+    commit id: "INSERT id=999 late"

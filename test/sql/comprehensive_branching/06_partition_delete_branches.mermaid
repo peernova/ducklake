@@ -1,0 +1,20 @@
+gitGraph
+    commit id: "CREATE TABLE events"
+    commit id: "PARTITION BY year,month"
+    commit id: "INSERT 8 events 2023+2024"
+    branch child1
+    commit id: "DELETE year=2023"
+    branch grandchild1
+    commit id: "DELETE year=2024 month=1"
+    branch greatgrandchild1
+    commit id: "INSERT 2025 data"
+    branch level4_branch
+    commit id: "DELETE except 2025-01"
+    branch level5_branch
+    commit id: "INSERT 2026 data"
+    checkout main
+    branch child2
+    commit id: "DELETE year=2024"
+    branch grandchild2
+    commit id: "REPARTITION BY event_type"
+    commit id: "DELETE event_type=click"

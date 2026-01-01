@@ -1,0 +1,360 @@
+# name: test/sql/comprehensive_branching/01_basic_crud.test
+# description: Basic CRUD operations across branches - INSERT, UPDATE, DELETE
+# group: [comprehensive_branching]
+
+require ducklake
+
+require parquet
+
+# Setup: Create DuckLake catalog
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/crud_test.db' AS t (DATA_PATH '__TEST_DIR__/crud_data');
+
+statement ok
+USE t;
+
+# ============================================================================
+# SETUP: Create table with data on main branch
+# ============================================================================
+
+statement ok
+CREATE TABLE products (id INT, name VARCHAR, price DECIMAL(10,2), stock INT);
+
+statement ok
+INSERT INTO products VALUES
+    (1, 'Apple', 1.50, 100),
+    (2, 'Banana', 0.75, 200),
+    (3, 'Cherry', 2.00, 150),
+    (4, 'Date', 3.50, 50),
+    (5, 'Elderberry', 5.00, 25);
+
+query I
+SELECT COUNT(*) FROM products AT (BRANCH => 'main');
+----
+5
+
+# ============================================================================
+# TEST 1: Create branch and verify data inheritance
+# ============================================================================
+
+statement ok
+CALL ducklake_create_branch('t', 'feature_branch');
+
+# Branch sees same data as main
+query I
+SELECT COUNT(*) FROM products AT (BRANCH => 'feature_branch');
+----
+5
+
+query ITRI
+SELECT * FROM products AT (BRANCH => 'feature_branch') ORDER BY id;
+----
+1	Apple	1.50	100
+2	Banana	0.75	200
+3	Cherry	2.00	150
+4	Date	3.50	50
+5	Elderberry	5.00	25
+
+# ============================================================================
+# TEST 2: INSERT on branch - isolated from main
+# ============================================================================
+
+statement ok
+CALL ducklake_use_branch('t', 'feature_branch');
+
+statement ok
+INSERT INTO products VALUES (6, 'Fig', 4.00, 75);
+
+# Feature branch has 6 products
+query I
+SELECT COUNT(*) FROM products;
+----
+6
+
+# Switch back to main
+statement ok
+CALL ducklake_use_branch('t', 'main');
+
+# Main still has 5 products
+query I
+SELECT COUNT(*) FROM products;
+----
+5
+
+# Verify via AT clause
+query I
+SELECT COUNT(*) FROM products AT (BRANCH => 'feature_branch');
+----
+6
+
+query I
+SELECT COUNT(*) FROM products AT (BRANCH => 'main');
+----
+5
+
+# ============================================================================
+# TEST 3: UPDATE on branch - isolated from main
+# ============================================================================
+
+statement ok
+CALL ducklake_use_branch('t', 'feature_branch');
+
+statement ok
+UPDATE products SET price = 9.99, stock = 999 WHERE id = 1;
+
+# Verify update on branch
+query ITRI
+SELECT * FROM products WHERE id = 1;
+----
+1	Apple	9.99	999
+
+# Switch to main - original values
+statement ok
+CALL ducklake_use_branch('t', 'main');
+
+query ITRI
+SELECT * FROM products WHERE id = 1;
+----
+1	Apple	1.50	100
+
+# Verify via AT clause
+query ITRI
+SELECT * FROM products AT (BRANCH => 'feature_branch') WHERE id = 1;
+----
+1	Apple	9.99	999
+
+query ITRI
+SELECT * FROM products AT (BRANCH => 'main') WHERE id = 1;
+----
+1	Apple	1.50	100
+
+# ============================================================================
+# TEST 4: DELETE on branch - isolated from main
+# ============================================================================
+
+statement ok
+CALL ducklake_use_branch('t', 'feature_branch');
+
+statement ok
+DELETE FROM products WHERE id IN (2, 4);
+
+# Feature branch has 4 products (6 - 2 deleted)
+query I
+SELECT COUNT(*) FROM products;
+----
+4
+
+query I
+SELECT id FROM products ORDER BY id;
+----
+1
+3
+5
+6
+
+# Main still has all 5 products
+query I
+SELECT COUNT(*) FROM products AT (BRANCH => 'main');
+----
+5
+
+# ============================================================================
+# TEST 5: Multiple operations in sequence on new branch
+# ============================================================================
+
+# Create a new branch from main
+statement ok
+CALL ducklake_use_branch('t', 'main');
+
+statement ok
+CALL ducklake_create_branch('t', 'multi_ops_branch');
+
+statement ok
+CALL ducklake_use_branch('t', 'multi_ops_branch');
+
+# INSERT
+statement ok
+INSERT INTO products VALUES (7, 'Grape', 2.50, 300);
+
+# UPDATE
+statement ok
+UPDATE products SET stock = stock * 2 WHERE id <= 3;
+
+# DELETE
+statement ok
+DELETE FROM products WHERE id = 5;
+
+# Verify final state on multi_ops_branch
+query ITRI
+SELECT * FROM products ORDER BY id;
+----
+1	Apple	1.50	200
+2	Banana	0.75	400
+3	Cherry	2.00	300
+4	Date	3.50	50
+7	Grape	2.50	300
+
+# Main is unchanged
+query ITRI
+SELECT * FROM products AT (BRANCH => 'main') ORDER BY id;
+----
+1	Apple	1.50	100
+2	Banana	0.75	200
+3	Cherry	2.00	150
+4	Date	3.50	50
+5	Elderberry	5.00	25
+
+# Feature branch has its own state
+query ITRI
+SELECT * FROM products AT (BRANCH => 'feature_branch') ORDER BY id;
+----
+1	Apple	9.99	999
+3	Cherry	2.00	150
+5	Elderberry	5.00	25
+6	Fig	4.00	75
+
+# ============================================================================
+# TEST 6: Operations on main after branch creation
+# ============================================================================
+
+statement ok
+CALL ducklake_use_branch('t', 'main');
+
+# Add new product to main
+statement ok
+INSERT INTO products VALUES (8, 'Honeydew', 6.00, 40);
+
+# Main has 6 products
+query I
+SELECT COUNT(*) FROM products;
+----
+6
+
+# Branches don't see main's new insert (forked before)
+query I
+SELECT COUNT(*) FROM products AT (BRANCH => 'feature_branch');
+----
+4
+
+query I
+SELECT COUNT(*) FROM products AT (BRANCH => 'multi_ops_branch');
+----
+5
+
+# ============================================================================
+# TEST 7: Sibling branches are isolated from each other
+# ============================================================================
+
+# feature_branch and multi_ops_branch are siblings (both from main)
+# Changes on one should not affect the other
+
+statement ok
+CALL ducklake_use_branch('t', 'feature_branch');
+
+statement ok
+INSERT INTO products VALUES (100, 'FeatureOnly', 10.00, 10);
+
+query I
+SELECT COUNT(*) FROM products WHERE id = 100;
+----
+1
+
+# multi_ops_branch should not see this
+query I
+SELECT COUNT(*) FROM products AT (BRANCH => 'multi_ops_branch') WHERE id = 100;
+----
+0
+
+# ============================================================================
+# TEST 8: TRUNCATE on branch - isolated from main
+# ============================================================================
+
+statement ok
+CALL ducklake_create_branch('t', 'truncate_branch');
+
+statement ok
+CALL ducklake_use_branch('t', 'truncate_branch');
+
+statement ok
+TRUNCATE TABLE products;
+
+query I
+SELECT COUNT(*) FROM products;
+----
+0
+
+# Can insert after truncate
+statement ok
+INSERT INTO products VALUES (200, 'NewStart', 1.00, 1);
+
+query I
+SELECT COUNT(*) FROM products;
+----
+1
+
+# Main unaffected
+query I
+SELECT COUNT(*) FROM products AT (BRANCH => 'main');
+----
+6
+
+# ============================================================================
+# TEST 9: Final state verification - all branches isolated
+# ============================================================================
+
+statement ok
+CALL ducklake_use_branch('t', 'main');
+
+query I
+SELECT COUNT(*) FROM products;
+----
+6
+
+statement ok
+CALL ducklake_use_branch('t', 'feature_branch');
+
+query I
+SELECT COUNT(*) FROM products;
+----
+5
+
+statement ok
+CALL ducklake_use_branch('t', 'multi_ops_branch');
+
+query I
+SELECT COUNT(*) FROM products;
+----
+5
+
+statement ok
+CALL ducklake_use_branch('t', 'truncate_branch');
+
+query I
+SELECT COUNT(*) FROM products;
+----
+1
+
+# ============================================================================
+# CLEANUP
+# ============================================================================
+
+statement ok
+CALL ducklake_use_branch('t', 'main');
+
+statement ok
+SELECT * FROM ducklake_delete_branch('t', 'truncate_branch');
+
+statement ok
+SELECT * FROM ducklake_delete_branch('t', 'feature_branch');
+
+statement ok
+SELECT * FROM ducklake_delete_branch('t', 'multi_ops_branch');
+
+statement ok
+DROP TABLE products;
+
+statement ok
+USE memory;
+
+statement ok
+DETACH t;

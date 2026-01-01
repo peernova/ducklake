@@ -1,0 +1,30 @@
+gitGraph
+    commit id: "CREATE TABLE sales"
+    commit id: "PARTITION BY region"
+    commit id: "INSERT US,EU,ASIA"
+    branch child1
+    commit id: "DELETE region=EU"
+    commit id: "INSERT EU,APAC"
+    commit id: "REPARTITION BY id"
+    commit id: "DELETE region=APAC"
+    branch grandchild1
+    commit id: "ADD COLUMN status"
+    commit id: "REPARTITION BY status"
+    commit id: "INSERT LATAM"
+    commit id: "DELETE region=EU"
+    commit id: "REPARTITION BY region"
+    commit id: "DROP COLUMN status"
+    branch greatgrandchild1
+    commit id: "ADD COLUMN priority"
+    commit id: "REPARTITION BY priority"
+    commit id: "INSERT URGENT"
+    checkout main
+    branch child2
+    commit id: "DELETE region=ASIA"
+    commit id: "INSERT AFRICA"
+    commit id: "TRUNCATE"
+    commit id: "INSERT RESTART"
+    branch grandchild2
+    checkout grandchild2
+    commit id: "DELETE region=EU"
+    commit id: "INSERT ANTARCTICA"

@@ -1,0 +1,406 @@
+# name: test/sql/comprehensive_branching/05_at_clause_comprehensive.test
+# description: Comprehensive AT clause testing - branch queries from any working branch
+# group: [comprehensive_branching]
+
+require ducklake
+
+require parquet
+
+# Setup: Create DuckLake catalog
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/at_clause.db' AS t (DATA_PATH '__TEST_DIR__/at_clause_data');
+
+statement ok
+USE t;
+
+# ============================================================================
+# SETUP: Create table with data and multiple branches
+# ============================================================================
+
+statement ok
+CREATE TABLE inventory (
+    id INT,
+    item VARCHAR,
+    quantity INT
+);
+
+statement ok
+INSERT INTO inventory VALUES
+    (1, 'Widget', 100),
+    (2, 'Gadget', 200),
+    (3, 'Gizmo', 300);
+
+# Create branch_a with modifications
+statement ok
+CALL ducklake_create_branch('t', 'branch_a');
+
+statement ok
+CALL ducklake_use_branch('t', 'branch_a');
+
+statement ok
+INSERT INTO inventory VALUES (4, 'Doodad', 400);
+
+statement ok
+UPDATE inventory SET quantity = 150 WHERE id = 1;
+
+# Create branch_b from main with different modifications
+statement ok
+CALL ducklake_use_branch('t', 'main');
+
+statement ok
+CALL ducklake_create_branch('t', 'branch_b');
+
+statement ok
+CALL ducklake_use_branch('t', 'branch_b');
+
+statement ok
+DELETE FROM inventory WHERE id = 2;
+
+statement ok
+INSERT INTO inventory VALUES (5, 'Thingamajig', 500);
+
+# Create branch_c from branch_a (child of branch_a)
+statement ok
+CALL ducklake_use_branch('t', 'branch_a');
+
+statement ok
+CALL ducklake_create_branch('t', 'branch_c');
+
+statement ok
+CALL ducklake_use_branch('t', 'branch_c');
+
+statement ok
+INSERT INTO inventory VALUES (6, 'Whatchamacallit', 600);
+
+statement ok
+DELETE FROM inventory WHERE id = 3;
+
+# ============================================================================
+# Expected states:
+# main: 3 rows (1-Widget-100, 2-Gadget-200, 3-Gizmo-300)
+# branch_a: 4 rows (1-Widget-150, 2-Gadget-200, 3-Gizmo-300, 4-Doodad-400)
+# branch_b: 3 rows (1-Widget-100, 3-Gizmo-300, 5-Thingamajig-500)
+# branch_c: 4 rows (1-Widget-150, 2-Gadget-200, 4-Doodad-400, 6-Whatchamacallit-600)
+# ============================================================================
+
+# ============================================================================
+# TEST 1: AT clause queries while on main branch
+# ============================================================================
+
+statement ok
+CALL ducklake_use_branch('t', 'main');
+
+# Query main (current branch)
+query ITI
+SELECT * FROM inventory AT (BRANCH => 'main') ORDER BY id;
+----
+1	Widget	100
+2	Gadget	200
+3	Gizmo	300
+
+# Query branch_a from main
+query ITI
+SELECT * FROM inventory AT (BRANCH => 'branch_a') ORDER BY id;
+----
+1	Widget	150
+2	Gadget	200
+3	Gizmo	300
+4	Doodad	400
+
+# Query branch_b from main
+query ITI
+SELECT * FROM inventory AT (BRANCH => 'branch_b') ORDER BY id;
+----
+1	Widget	100
+3	Gizmo	300
+5	Thingamajig	500
+
+# Query branch_c from main
+query ITI
+SELECT * FROM inventory AT (BRANCH => 'branch_c') ORDER BY id;
+----
+1	Widget	150
+2	Gadget	200
+4	Doodad	400
+6	Whatchamacallit	600
+
+# ============================================================================
+# TEST 2: AT clause queries while on branch_a
+# ============================================================================
+
+statement ok
+CALL ducklake_use_branch('t', 'branch_a');
+
+# Query main from branch_a
+query ITI
+SELECT * FROM inventory AT (BRANCH => 'main') ORDER BY id;
+----
+1	Widget	100
+2	Gadget	200
+3	Gizmo	300
+
+# Query branch_a (current branch)
+query ITI
+SELECT * FROM inventory AT (BRANCH => 'branch_a') ORDER BY id;
+----
+1	Widget	150
+2	Gadget	200
+3	Gizmo	300
+4	Doodad	400
+
+# Query branch_b (sibling) from branch_a
+query ITI
+SELECT * FROM inventory AT (BRANCH => 'branch_b') ORDER BY id;
+----
+1	Widget	100
+3	Gizmo	300
+5	Thingamajig	500
+
+# Query branch_c (child) from branch_a
+query ITI
+SELECT * FROM inventory AT (BRANCH => 'branch_c') ORDER BY id;
+----
+1	Widget	150
+2	Gadget	200
+4	Doodad	400
+6	Whatchamacallit	600
+
+# ============================================================================
+# TEST 3: AT clause queries while on branch_b
+# ============================================================================
+
+statement ok
+CALL ducklake_use_branch('t', 'branch_b');
+
+# Query main from branch_b
+query ITI
+SELECT * FROM inventory AT (BRANCH => 'main') ORDER BY id;
+----
+1	Widget	100
+2	Gadget	200
+3	Gizmo	300
+
+# Query branch_a (sibling) from branch_b
+query ITI
+SELECT * FROM inventory AT (BRANCH => 'branch_a') ORDER BY id;
+----
+1	Widget	150
+2	Gadget	200
+3	Gizmo	300
+4	Doodad	400
+
+# Query branch_b (current branch)
+query ITI
+SELECT * FROM inventory AT (BRANCH => 'branch_b') ORDER BY id;
+----
+1	Widget	100
+3	Gizmo	300
+5	Thingamajig	500
+
+# Query branch_c (nephew - child of sibling) from branch_b
+query ITI
+SELECT * FROM inventory AT (BRANCH => 'branch_c') ORDER BY id;
+----
+1	Widget	150
+2	Gadget	200
+4	Doodad	400
+6	Whatchamacallit	600
+
+# ============================================================================
+# TEST 4: AT clause queries while on branch_c (deepest)
+# ============================================================================
+
+statement ok
+CALL ducklake_use_branch('t', 'branch_c');
+
+# Query main (grandparent) from branch_c
+query ITI
+SELECT * FROM inventory AT (BRANCH => 'main') ORDER BY id;
+----
+1	Widget	100
+2	Gadget	200
+3	Gizmo	300
+
+# Query branch_a (parent) from branch_c
+query ITI
+SELECT * FROM inventory AT (BRANCH => 'branch_a') ORDER BY id;
+----
+1	Widget	150
+2	Gadget	200
+3	Gizmo	300
+4	Doodad	400
+
+# Query branch_b (uncle) from branch_c
+query ITI
+SELECT * FROM inventory AT (BRANCH => 'branch_b') ORDER BY id;
+----
+1	Widget	100
+3	Gizmo	300
+5	Thingamajig	500
+
+# Query branch_c (current branch)
+query ITI
+SELECT * FROM inventory AT (BRANCH => 'branch_c') ORDER BY id;
+----
+1	Widget	150
+2	Gadget	200
+4	Doodad	400
+6	Whatchamacallit	600
+
+# ============================================================================
+# TEST 5: AT clause with aggregations
+# ============================================================================
+
+statement ok
+CALL ducklake_use_branch('t', 'main');
+
+query I
+SELECT SUM(quantity) FROM inventory AT (BRANCH => 'main');
+----
+600
+
+query I
+SELECT SUM(quantity) FROM inventory AT (BRANCH => 'branch_a');
+----
+1050
+
+query I
+SELECT SUM(quantity) FROM inventory AT (BRANCH => 'branch_b');
+----
+900
+
+query I
+SELECT SUM(quantity) FROM inventory AT (BRANCH => 'branch_c');
+----
+1350
+
+# ============================================================================
+# TEST 6: AT clause with WHERE clause
+# ============================================================================
+
+query ITI
+SELECT * FROM inventory AT (BRANCH => 'main') WHERE quantity > 150 ORDER BY id;
+----
+2	Gadget	200
+3	Gizmo	300
+
+query ITI
+SELECT * FROM inventory AT (BRANCH => 'branch_a') WHERE quantity > 150 ORDER BY id;
+----
+2	Gadget	200
+3	Gizmo	300
+4	Doodad	400
+
+query ITI
+SELECT * FROM inventory AT (BRANCH => 'branch_b') WHERE quantity > 150 ORDER BY id;
+----
+3	Gizmo	300
+5	Thingamajig	500
+
+# ============================================================================
+# TEST 7: AT clause with JOINs (self-join different branches)
+# ============================================================================
+
+# Compare main vs branch_a for same items
+query ITIII
+SELECT m.id, m.item, m.quantity as main_qty, a.quantity as branch_a_qty, a.quantity - m.quantity as diff
+FROM inventory AS m AT (BRANCH => 'main')
+JOIN inventory AS a AT (BRANCH => 'branch_a') ON m.id = a.id
+ORDER BY m.id;
+----
+1	Widget	100	150	50
+2	Gadget	200	200	0
+3	Gizmo	300	300	0
+
+# Items in branch_a but not in main
+query ITI
+SELECT a.id, a.item, a.quantity
+FROM inventory AS a AT (BRANCH => 'branch_a')
+LEFT JOIN inventory AS m AT (BRANCH => 'main') ON a.id = m.id
+WHERE m.id IS NULL
+ORDER BY a.id;
+----
+4	Doodad	400
+
+# Items in main but not in branch_b
+query ITI
+SELECT m.id, m.item, m.quantity
+FROM inventory AS m AT (BRANCH => 'main')
+LEFT JOIN inventory AS b AT (BRANCH => 'branch_b') ON m.id = b.id
+WHERE b.id IS NULL
+ORDER BY m.id;
+----
+2	Gadget	200
+
+# ============================================================================
+# TEST 8: AT clause with subqueries
+# ============================================================================
+
+# Items with quantity greater than max in branch_b
+query ITI
+SELECT * FROM inventory AT (BRANCH => 'branch_a')
+WHERE quantity > (SELECT MAX(quantity) FROM inventory AT (BRANCH => 'main'))
+ORDER BY id;
+----
+4	Doodad	400
+
+# Count items unique to each branch
+query I
+SELECT COUNT(*) FROM inventory AT (BRANCH => 'branch_c')
+WHERE id NOT IN (SELECT id FROM inventory AT (BRANCH => 'main'));
+----
+2
+
+# ============================================================================
+# TEST 9: AT clause with UNION across branches
+# ============================================================================
+
+query IT
+SELECT id, item FROM inventory AT (BRANCH => 'main')
+UNION
+SELECT id, item FROM inventory AT (BRANCH => 'branch_b')
+ORDER BY id;
+----
+1	Widget
+2	Gadget
+3	Gizmo
+5	Thingamajig
+
+# ============================================================================
+# TEST 10: Multiple AT clause queries in same statement
+# ============================================================================
+
+# Compare counts across all branches
+query IIII
+SELECT
+    (SELECT COUNT(*) FROM inventory AT (BRANCH => 'main')) as main_count,
+    (SELECT COUNT(*) FROM inventory AT (BRANCH => 'branch_a')) as branch_a_count,
+    (SELECT COUNT(*) FROM inventory AT (BRANCH => 'branch_b')) as branch_b_count,
+    (SELECT COUNT(*) FROM inventory AT (BRANCH => 'branch_c')) as branch_c_count;
+----
+3	4	3	4
+
+# ============================================================================
+# CLEANUP
+# ============================================================================
+
+statement ok
+CALL ducklake_use_branch('t', 'main');
+
+statement ok
+SELECT * FROM ducklake_delete_branch('t', 'branch_c');
+
+statement ok
+SELECT * FROM ducklake_delete_branch('t', 'branch_a');
+
+statement ok
+SELECT * FROM ducklake_delete_branch('t', 'branch_b');
+
+statement ok
+DROP TABLE inventory;
+
+statement ok
+USE memory;
+
+statement ok
+DETACH t;

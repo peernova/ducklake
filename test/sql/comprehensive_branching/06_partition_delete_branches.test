@@ -1,0 +1,453 @@
+# name: test/sql/comprehensive_branching/06_partition_delete_branches.test
+# description: Partition deletion scenarios across deep branch hierarchies
+# group: [comprehensive_branching]
+
+require ducklake
+
+require parquet
+
+# Setup: Create DuckLake catalog
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/part_del.db' AS t (DATA_PATH '__TEST_DIR__/part_del_data');
+
+statement ok
+USE t;
+
+# ============================================================================
+# SETUP: Create partitioned table with multiple partitions
+# ============================================================================
+
+statement ok
+CREATE TABLE events (
+    id INT,
+    year INT,
+    month INT,
+    event_type VARCHAR,
+    value INT
+);
+
+statement ok
+ALTER TABLE events SET PARTITIONED BY (year, month);
+
+statement ok
+INSERT INTO events VALUES
+    (1, 2023, 1, 'click', 100),
+    (2, 2023, 1, 'view', 200),
+    (3, 2023, 2, 'click', 300),
+    (4, 2023, 2, 'purchase', 400),
+    (5, 2023, 3, 'click', 500),
+    (6, 2024, 1, 'view', 600),
+    (7, 2024, 1, 'click', 700),
+    (8, 2024, 2, 'purchase', 800);
+
+query III
+SELECT year, month, COUNT(*) as cnt FROM events GROUP BY year, month ORDER BY year, month;
+----
+2023	1	2
+2023	2	2
+2023	3	1
+2024	1	2
+2024	2	1
+
+# ============================================================================
+# TEST 1: Delete entire year partition on child branch
+# ============================================================================
+
+statement ok
+CALL ducklake_create_branch('t', 'child1');
+
+statement ok
+CALL ducklake_use_branch('t', 'child1');
+
+# Delete all 2023 data
+statement ok
+DELETE FROM events WHERE year = 2023;
+
+query III
+SELECT year, month, COUNT(*) as cnt FROM events GROUP BY year, month ORDER BY year, month;
+----
+2024	1	2
+2024	2	1
+
+# Main unaffected
+statement ok
+CALL ducklake_use_branch('t', 'main');
+
+query III
+SELECT year, month, COUNT(*) as cnt FROM events GROUP BY year, month ORDER BY year, month;
+----
+2023	1	2
+2023	2	2
+2023	3	1
+2024	1	2
+2024	2	1
+
+# ============================================================================
+# TEST 2: Delete specific month partition on grandchild branch
+# ============================================================================
+
+statement ok
+CALL ducklake_use_branch('t', 'child1');
+
+statement ok
+CALL ducklake_create_branch('t', 'grandchild1');
+
+statement ok
+CALL ducklake_use_branch('t', 'grandchild1');
+
+# Grandchild inherits child1's state (only 2024 data)
+query III
+SELECT year, month, COUNT(*) as cnt FROM events GROUP BY year, month ORDER BY year, month;
+----
+2024	1	2
+2024	2	1
+
+# Delete 2024-01 partition
+statement ok
+DELETE FROM events WHERE year = 2024 AND month = 1;
+
+query III
+SELECT year, month, COUNT(*) as cnt FROM events GROUP BY year, month ORDER BY year, month;
+----
+2024	2	1
+
+# Child1 unaffected
+statement ok
+CALL ducklake_use_branch('t', 'child1');
+
+query III
+SELECT year, month, COUNT(*) as cnt FROM events GROUP BY year, month ORDER BY year, month;
+----
+2024	1	2
+2024	2	1
+
+# Main unaffected
+statement ok
+CALL ducklake_use_branch('t', 'main');
+
+query III
+SELECT year, month, COUNT(*) as cnt FROM events GROUP BY year, month ORDER BY year, month;
+----
+2023	1	2
+2023	2	2
+2023	3	1
+2024	1	2
+2024	2	1
+
+# ============================================================================
+# TEST 3: Add new partition on great-grandchild branch
+# ============================================================================
+
+statement ok
+CALL ducklake_use_branch('t', 'grandchild1');
+
+statement ok
+CALL ducklake_create_branch('t', 'greatgrandchild1');
+
+statement ok
+CALL ducklake_use_branch('t', 'greatgrandchild1');
+
+# Great-grandchild only has 2024-02
+query III
+SELECT year, month, COUNT(*) as cnt FROM events GROUP BY year, month ORDER BY year, month;
+----
+2024	2	1
+
+# Add new partitions
+statement ok
+INSERT INTO events VALUES
+    (100, 2025, 1, 'new_event', 1000),
+    (101, 2025, 1, 'another', 1100),
+    (102, 2025, 2, 'third', 1200);
+
+query III
+SELECT year, month, COUNT(*) as cnt FROM events GROUP BY year, month ORDER BY year, month;
+----
+2024	2	1
+2025	1	2
+2025	2	1
+
+# Verify ancestors don't see new partitions
+query I
+SELECT COUNT(*) FROM events AT (BRANCH => 'grandchild1') WHERE year = 2025;
+----
+0
+
+query I
+SELECT COUNT(*) FROM events AT (BRANCH => 'child1') WHERE year = 2025;
+----
+0
+
+query I
+SELECT COUNT(*) FROM events AT (BRANCH => 'main') WHERE year = 2025;
+----
+0
+
+# ============================================================================
+# TEST 4: Sibling branch with different partition deletions
+# ============================================================================
+
+statement ok
+CALL ducklake_use_branch('t', 'main');
+
+statement ok
+CALL ducklake_create_branch('t', 'child2');
+
+statement ok
+CALL ducklake_use_branch('t', 'child2');
+
+# Delete 2024 data (opposite of child1 which deleted 2023)
+statement ok
+DELETE FROM events WHERE year = 2024;
+
+query III
+SELECT year, month, COUNT(*) as cnt FROM events GROUP BY year, month ORDER BY year, month;
+----
+2023	1	2
+2023	2	2
+2023	3	1
+
+# child1 has only 2024, child2 has only 2023
+query I
+SELECT COUNT(*) FROM events AT (BRANCH => 'child1') WHERE year = 2023;
+----
+0
+
+query I
+SELECT COUNT(*) FROM events AT (BRANCH => 'child1') WHERE year = 2024;
+----
+3
+
+query I
+SELECT COUNT(*) FROM events AT (BRANCH => 'child2') WHERE year = 2023;
+----
+5
+
+query I
+SELECT COUNT(*) FROM events AT (BRANCH => 'child2') WHERE year = 2024;
+----
+0
+
+# ============================================================================
+# TEST 5: Repartition and delete on deep branch
+# ============================================================================
+
+statement ok
+CALL ducklake_use_branch('t', 'child2');
+
+statement ok
+CALL ducklake_create_branch('t', 'grandchild2');
+
+statement ok
+CALL ducklake_use_branch('t', 'grandchild2');
+
+# Repartition by event_type
+statement ok
+ALTER TABLE events SET PARTITIONED BY (event_type);
+
+query TI
+SELECT event_type, COUNT(*) as cnt FROM events GROUP BY event_type ORDER BY event_type;
+----
+click	3
+purchase	1
+view	1
+
+# Delete click partition
+statement ok
+DELETE FROM events WHERE event_type = 'click';
+
+query TI
+SELECT event_type, COUNT(*) as cnt FROM events GROUP BY event_type ORDER BY event_type;
+----
+purchase	1
+view	1
+
+# child2 unaffected (still partitioned by year, month)
+statement ok
+CALL ducklake_use_branch('t', 'child2');
+
+query III
+SELECT year, month, COUNT(*) as cnt FROM events GROUP BY year, month ORDER BY year, month;
+----
+2023	1	2
+2023	2	2
+2023	3	1
+
+# ============================================================================
+# TEST 6: Create branch from deep descendant and delete more partitions
+# ============================================================================
+
+statement ok
+CALL ducklake_use_branch('t', 'greatgrandchild1');
+
+statement ok
+CALL ducklake_create_branch('t', 'level4_branch');
+
+statement ok
+CALL ducklake_use_branch('t', 'level4_branch');
+
+# Inherits greatgrandchild1's state
+query III
+SELECT year, month, COUNT(*) as cnt FROM events GROUP BY year, month ORDER BY year, month;
+----
+2024	2	1
+2025	1	2
+2025	2	1
+
+# Delete all remaining partitions except 2025-01
+statement ok
+DELETE FROM events WHERE NOT (year = 2025 AND month = 1);
+
+query III
+SELECT year, month, COUNT(*) as cnt FROM events GROUP BY year, month ORDER BY year, month;
+----
+2025	1	2
+
+# Create another level
+statement ok
+CALL ducklake_create_branch('t', 'level5_branch');
+
+statement ok
+CALL ducklake_use_branch('t', 'level5_branch');
+
+# Add back some data
+statement ok
+INSERT INTO events VALUES
+    (200, 2026, 6, 'summer', 2000),
+    (201, 2026, 12, 'winter', 2100);
+
+query III
+SELECT year, month, COUNT(*) as cnt FROM events GROUP BY year, month ORDER BY year, month;
+----
+2025	1	2
+2026	6	1
+2026	12	1
+
+# ============================================================================
+# TEST 7: Verify complete branch hierarchy state
+# ============================================================================
+
+# main: all original data (8 rows)
+query I
+SELECT COUNT(*) FROM events AT (BRANCH => 'main');
+----
+8
+
+# child1: only 2024 data (3 rows)
+query I
+SELECT COUNT(*) FROM events AT (BRANCH => 'child1');
+----
+3
+
+# grandchild1: only 2024-02 (1 row)
+query I
+SELECT COUNT(*) FROM events AT (BRANCH => 'grandchild1');
+----
+1
+
+# greatgrandchild1: 2024-02 + 2025 data (4 rows)
+query I
+SELECT COUNT(*) FROM events AT (BRANCH => 'greatgrandchild1');
+----
+4
+
+# level4_branch: only 2025-01 (2 rows)
+query I
+SELECT COUNT(*) FROM events AT (BRANCH => 'level4_branch');
+----
+2
+
+# level5_branch: 2025-01 + 2026 data (4 rows)
+query I
+SELECT COUNT(*) FROM events AT (BRANCH => 'level5_branch');
+----
+4
+
+# child2: only 2023 data (5 rows)
+query I
+SELECT COUNT(*) FROM events AT (BRANCH => 'child2');
+----
+5
+
+# grandchild2: 2023 data minus click events (2 rows)
+query I
+SELECT COUNT(*) FROM events AT (BRANCH => 'grandchild2');
+----
+2
+
+# ============================================================================
+# TEST 8: AT clause verification from deepest branch
+# ============================================================================
+
+statement ok
+CALL ducklake_use_branch('t', 'level5_branch');
+
+# Can still query all ancestors via AT clause
+query III
+SELECT year, month, COUNT(*) as cnt FROM events AT (BRANCH => 'main') GROUP BY year, month ORDER BY year, month;
+----
+2023	1	2
+2023	2	2
+2023	3	1
+2024	1	2
+2024	2	1
+
+query III
+SELECT year, month, COUNT(*) as cnt FROM events AT (BRANCH => 'child1') GROUP BY year, month ORDER BY year, month;
+----
+2024	1	2
+2024	2	1
+
+query III
+SELECT year, month, COUNT(*) as cnt FROM events AT (BRANCH => 'grandchild1') GROUP BY year, month ORDER BY year, month;
+----
+2024	2	1
+
+query III
+SELECT year, month, COUNT(*) as cnt FROM events AT (BRANCH => 'greatgrandchild1') GROUP BY year, month ORDER BY year, month;
+----
+2024	2	1
+2025	1	2
+2025	2	1
+
+query III
+SELECT year, month, COUNT(*) as cnt FROM events AT (BRANCH => 'level4_branch') GROUP BY year, month ORDER BY year, month;
+----
+2025	1	2
+
+# ============================================================================
+# CLEANUP
+# ============================================================================
+
+statement ok
+CALL ducklake_use_branch('t', 'main');
+
+statement ok
+SELECT * FROM ducklake_delete_branch('t', 'level5_branch');
+
+statement ok
+SELECT * FROM ducklake_delete_branch('t', 'level4_branch');
+
+statement ok
+SELECT * FROM ducklake_delete_branch('t', 'greatgrandchild1');
+
+statement ok
+SELECT * FROM ducklake_delete_branch('t', 'grandchild1');
+
+statement ok
+SELECT * FROM ducklake_delete_branch('t', 'grandchild2');
+
+statement ok
+SELECT * FROM ducklake_delete_branch('t', 'child1');
+
+statement ok
+SELECT * FROM ducklake_delete_branch('t', 'child2');
+
+statement ok
+DROP TABLE events;
+
+statement ok
+USE memory;
+
+statement ok
+DETACH t;

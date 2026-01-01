@@ -1,0 +1,397 @@
+# name: test/sql/parallel/00_parallel_branch_ops.test
+# description: Parallel operations on multiple branches - simulates real-world concurrent development
+# group: [parallel]
+
+require ducklake
+
+require parquet
+
+statement ok
+LOAD '/Users/nareshbalusu/Downloads/claude/ducklake/ducklake_branching/postgres_scanner/build/release/extension/postgres_scanner/postgres_scanner.duckdb_extension';
+
+# Setup: Create DuckLake with PostgreSQL metadata for concurrent access
+# Use a fixed path so parallel test runs can access the same data via Postgres
+statement ok
+ATTACH 'ducklake:postgres:dbname=parallel_test host=localhost port=5433 user=postgres password=postgres' AS t (DATA_PATH '/tmp/parallel_data');
+
+statement ok
+USE t;
+
+# ============================================================================
+# SETUP: Create shared table on main
+# ============================================================================
+
+statement ok
+CREATE TABLE users (
+    id INT,
+    name VARCHAR,
+    email VARCHAR,
+    status VARCHAR DEFAULT 'active'
+);
+
+statement ok
+INSERT INTO users VALUES
+    (1, 'Alice', 'alice@example.com', 'active'),
+    (2, 'Bob', 'bob@example.com', 'active'),
+    (3, 'Charlie', 'charlie@example.com', 'active'),
+    (4, 'Diana', 'diana@example.com', 'active'),
+    (5, 'Eve', 'eve@example.com', 'active');
+
+query I
+SELECT COUNT(*) FROM users;
+----
+5
+
+# ============================================================================
+# TEST 1: Create multiple branches from main simultaneously
+# ============================================================================
+
+# Create 3 feature branches that will work in parallel
+statement ok
+CALL ducklake_create_branch('t', 'feature_auth');
+
+statement ok
+CALL ducklake_create_branch('t', 'feature_profile');
+
+statement ok
+CALL ducklake_create_branch('t', 'feature_billing');
+
+# ============================================================================
+# TEST 2: Simulate parallel work - each branch does different operations
+# ============================================================================
+
+# --- Feature Auth: Add authentication fields ---
+statement ok
+CALL ducklake_use_branch('t', 'feature_auth');
+
+statement ok
+ALTER TABLE users ADD COLUMN last_login TIMESTAMP;
+
+statement ok
+ALTER TABLE users ADD COLUMN login_count INT DEFAULT 0;
+
+statement ok
+UPDATE users SET login_count = 10 WHERE id = 1;
+
+statement ok
+INSERT INTO users VALUES (100, 'AuthUser', 'auth@example.com', 'active', '2024-01-15 10:30:00', 5);
+
+# --- Feature Profile: Add profile fields ---
+statement ok
+CALL ducklake_use_branch('t', 'feature_profile');
+
+statement ok
+ALTER TABLE users ADD COLUMN avatar_url VARCHAR;
+
+statement ok
+ALTER TABLE users ADD COLUMN bio TEXT;
+
+statement ok
+UPDATE users SET status = 'premium' WHERE id IN (1, 2);
+
+statement ok
+INSERT INTO users VALUES (200, 'ProfileUser', 'profile@example.com', 'premium', 'https://avatar.com/200', 'I love coding');
+
+# --- Feature Billing: Add billing fields ---
+statement ok
+CALL ducklake_use_branch('t', 'feature_billing');
+
+statement ok
+ALTER TABLE users ADD COLUMN plan VARCHAR DEFAULT 'free';
+
+statement ok
+ALTER TABLE users ADD COLUMN balance DECIMAL(10,2) DEFAULT 0.00;
+
+statement ok
+UPDATE users SET plan = 'pro', balance = 99.99 WHERE id = 1;
+
+statement ok
+DELETE FROM users WHERE id = 5;
+
+statement ok
+INSERT INTO users VALUES (300, 'BillingUser', 'billing@example.com', 'active', 'enterprise', 999.99);
+
+# ============================================================================
+# TEST 3: Verify each branch has its own isolated state
+# ============================================================================
+
+# Check main - should be unchanged
+statement ok
+CALL ducklake_use_branch('t', 'main');
+
+query I
+SELECT COUNT(*) FROM users;
+----
+5
+
+# Check feature_auth
+query I
+SELECT COUNT(*) FROM users AT (BRANCH => 'feature_auth');
+----
+6
+
+query I
+SELECT login_count FROM users AT (BRANCH => 'feature_auth') WHERE id = 1;
+----
+10
+
+# Check feature_profile
+query I
+SELECT COUNT(*) FROM users AT (BRANCH => 'feature_profile');
+----
+6
+
+query T
+SELECT status FROM users AT (BRANCH => 'feature_profile') WHERE id = 1;
+----
+premium
+
+# Check feature_billing
+query I
+SELECT COUNT(*) FROM users AT (BRANCH => 'feature_billing');
+----
+5
+
+query T
+SELECT plan FROM users AT (BRANCH => 'feature_billing') WHERE id = 1;
+----
+pro
+
+# ============================================================================
+# TEST 4: Create child branches while parent branches continue working
+# ============================================================================
+
+# Create child of feature_auth for a sub-feature
+statement ok
+CALL ducklake_use_branch('t', 'feature_auth');
+
+statement ok
+CALL ducklake_create_branch('t', 'feature_auth_2fa');
+
+statement ok
+CALL ducklake_use_branch('t', 'feature_auth_2fa');
+
+statement ok
+ALTER TABLE users ADD COLUMN two_factor_enabled BOOLEAN DEFAULT false;
+
+statement ok
+UPDATE users SET two_factor_enabled = true WHERE id = 1;
+
+# Meanwhile, continue work on parent feature_auth
+statement ok
+CALL ducklake_use_branch('t', 'feature_auth');
+
+statement ok
+INSERT INTO users VALUES (101, 'AuthUser2', 'auth2@example.com', 'active', '2024-01-16 11:00:00', 3);
+
+# And feature_profile creates its own child
+statement ok
+CALL ducklake_use_branch('t', 'feature_profile');
+
+statement ok
+CALL ducklake_create_branch('t', 'feature_profile_settings');
+
+statement ok
+CALL ducklake_use_branch('t', 'feature_profile_settings');
+
+statement ok
+ALTER TABLE users ADD COLUMN notification_prefs VARCHAR DEFAULT 'all';
+
+statement ok
+UPDATE users SET notification_prefs = 'important' WHERE id = 2;
+
+# ============================================================================
+# TEST 5: Verify nested branch hierarchy
+# ============================================================================
+
+# feature_auth should have 7 users now (original 6 + AuthUser2)
+query I
+SELECT COUNT(*) FROM users AT (BRANCH => 'feature_auth');
+----
+7
+
+# feature_auth_2fa forked before AuthUser2 was added, so it has 6
+query I
+SELECT COUNT(*) FROM users AT (BRANCH => 'feature_auth_2fa');
+----
+6
+
+# feature_auth_2fa has two_factor_enabled column
+query I
+SELECT COUNT(*) FROM users AT (BRANCH => 'feature_auth_2fa') WHERE two_factor_enabled = true;
+----
+1
+
+# feature_profile_settings inherited from feature_profile
+query I
+SELECT COUNT(*) FROM users AT (BRANCH => 'feature_profile_settings');
+----
+6
+
+# ============================================================================
+# TEST 6: Cross-branch queries while on different working branches
+# ============================================================================
+
+statement ok
+CALL ducklake_use_branch('t', 'feature_billing');
+
+# From billing branch, query other branches
+query I
+SELECT COUNT(*) FROM users AT (BRANCH => 'main');
+----
+5
+
+query I
+SELECT COUNT(*) FROM users AT (BRANCH => 'feature_auth');
+----
+7
+
+query I
+SELECT COUNT(*) FROM users AT (BRANCH => 'feature_auth_2fa');
+----
+6
+
+query I
+SELECT COUNT(*) FROM users AT (BRANCH => 'feature_profile');
+----
+6
+
+query I
+SELECT COUNT(*) FROM users AT (BRANCH => 'feature_profile_settings');
+----
+6
+
+# ============================================================================
+# TEST 7: More operations on all branches simultaneously
+# ============================================================================
+
+# Main branch gets a new user
+statement ok
+CALL ducklake_use_branch('t', 'main');
+
+statement ok
+INSERT INTO users VALUES (6, 'Frank', 'frank@example.com', 'active');
+
+# feature_auth deletes a user
+statement ok
+CALL ducklake_use_branch('t', 'feature_auth');
+
+statement ok
+DELETE FROM users WHERE id = 4;
+
+# feature_profile updates multiple users
+statement ok
+CALL ducklake_use_branch('t', 'feature_profile');
+
+statement ok
+UPDATE users SET status = 'vip' WHERE id = 3;
+
+# feature_billing adds more billing data
+statement ok
+CALL ducklake_use_branch('t', 'feature_billing');
+
+statement ok
+INSERT INTO users VALUES (301, 'BillingUser2', 'billing2@example.com', 'active', 'pro', 49.99);
+
+# feature_auth_2fa adds more 2FA users
+statement ok
+CALL ducklake_use_branch('t', 'feature_auth_2fa');
+
+statement ok
+UPDATE users SET two_factor_enabled = true WHERE id IN (2, 3);
+
+# ============================================================================
+# TEST 8: Final state verification - all branches isolated
+# ============================================================================
+
+query I
+SELECT COUNT(*) FROM users AT (BRANCH => 'main');
+----
+6
+
+query I
+SELECT COUNT(*) FROM users AT (BRANCH => 'feature_auth');
+----
+6
+
+query I
+SELECT COUNT(*) FROM users AT (BRANCH => 'feature_auth_2fa');
+----
+6
+
+query I
+SELECT COUNT(*) FROM users AT (BRANCH => 'feature_profile');
+----
+6
+
+query I
+SELECT COUNT(*) FROM users AT (BRANCH => 'feature_profile_settings');
+----
+6
+
+query I
+SELECT COUNT(*) FROM users AT (BRANCH => 'feature_billing');
+----
+6
+
+# Verify specific data on each branch
+# Main has Frank (id=6)
+query I
+SELECT COUNT(*) FROM users AT (BRANCH => 'main') WHERE id = 6;
+----
+1
+
+# feature_auth deleted Diana (id=4)
+query I
+SELECT COUNT(*) FROM users AT (BRANCH => 'feature_auth') WHERE id = 4;
+----
+0
+
+# feature_profile has Charlie as VIP
+query T
+SELECT status FROM users AT (BRANCH => 'feature_profile') WHERE id = 3;
+----
+vip
+
+# feature_billing has BillingUser2
+query I
+SELECT COUNT(*) FROM users AT (BRANCH => 'feature_billing') WHERE id = 301;
+----
+1
+
+# feature_auth_2fa has 3 users with 2FA enabled
+query I
+SELECT COUNT(*) FROM users AT (BRANCH => 'feature_auth_2fa') WHERE two_factor_enabled = true;
+----
+3
+
+# ============================================================================
+# CLEANUP
+# ============================================================================
+
+statement ok
+CALL ducklake_use_branch('t', 'main');
+
+statement ok
+SELECT * FROM ducklake_delete_branch('t', 'feature_auth_2fa');
+
+statement ok
+SELECT * FROM ducklake_delete_branch('t', 'feature_profile_settings');
+
+statement ok
+SELECT * FROM ducklake_delete_branch('t', 'feature_auth');
+
+statement ok
+SELECT * FROM ducklake_delete_branch('t', 'feature_profile');
+
+statement ok
+SELECT * FROM ducklake_delete_branch('t', 'feature_billing');
+
+statement ok
+DROP TABLE users;
+
+statement ok
+USE memory;
+
+statement ok
+DETACH t;

@@ -1,0 +1,32 @@
+gitGraph
+    commit id: "CREATE TABLE users"
+    commit id: "INSERT 5 users"
+    branch feature_auth
+    commit id: "ADD last_login,login_count"
+    commit id: "UPDATE login_count id=1"
+    commit id: "INSERT AuthUser id=100"
+    branch feature_auth_2fa
+    commit id: "ADD two_factor_enabled"
+    commit id: "UPDATE 2FA id=1"
+    commit id: "UPDATE 2FA id=2,3"
+    checkout feature_auth
+    commit id: "INSERT AuthUser2 id=101"
+    commit id: "DELETE id=4"
+    checkout main
+    branch feature_profile
+    commit id: "ADD avatar_url,bio"
+    commit id: "UPDATE premium id=1,2"
+    commit id: "INSERT ProfileUser id=200"
+    commit id: "UPDATE vip id=3"
+    branch feature_profile_settings
+    commit id: "ADD notification_prefs"
+    commit id: "UPDATE prefs id=2"
+    checkout main
+    branch feature_billing
+    commit id: "ADD plan,balance"
+    commit id: "UPDATE pro id=1"
+    commit id: "DELETE id=5"
+    commit id: "INSERT BillingUser id=300"
+    commit id: "INSERT BillingUser2 id=301"
+    checkout main
+    commit id: "INSERT Frank id=6"
