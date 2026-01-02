@@ -1565,11 +1565,13 @@ CompactionInformation DuckLakeTransaction::GetCompactionChanges(DuckLakeSnapshot
 				}
 				DuckLakeCompactedFileInfo file_info;
 				file_info.path = compacted_file.file.data.path;
+				file_info.source_branch_id = compacted_file.file.branch_id;
 				file_info.source_id = compacted_file.file.id;
 				file_info.new_id = new_file.id;
 
 				if (!compacted_file.delete_files.empty()) {
 					file_info.delete_file_path = compacted_file.delete_files.back().data.path;
+					file_info.delete_file_branch_id = compacted_file.delete_files.back().branch_id;
 					file_info.delete_file_id = compacted_file.delete_files.back().delete_file_id;
 					file_info.start_snapshot = compacted_file.file.begin_snapshot;
 					file_info.table_index = entry.first;

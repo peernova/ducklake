@@ -1539,50 +1539,86 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
                                                                                    double deletion_threshold,
                                                                                    DuckLakeSnapshot snapshot) {
 	auto table_id = table.GetTableId();
-	string data_select_list = "data.data_file_id, data.record_count, data.row_id_start, data.begin_snapshot, "
-	                          "data.end_snapshot, data.mapping_id, sr.schema_version , data.partial_file_info, "
+	// Branch-aware select list - includes data.branch_id
+	string data_select_list = "data.branch_id, data.data_file_id, data.record_count, data.row_id_start, data.begin_snapshot, "
+	                          "data.end_snapshot, data.mapping_id, sr.schema_version, data.partial_file_info, "
 	                          "data.partition_id, partition_info.keys, " +
 	                          GetFileSelectList("data");
 	string delete_select_list =
-	    "del.data_file_id,del.delete_file_id, del.delete_count, del.begin_snapshot, del.end_snapshot, " +
+	    "del.delete_file_branch_id, del.join_data_file_id, del.delete_file_id, del.delete_count, del.begin_snapshot, del.end_snapshot, " +
 	    GetFileSelectList("del");
 	string select_list = data_select_list + ", " + delete_select_list;
 	string deletion_threshold_clause;
 	if (type == CompactionType::REWRITE_DELETES) {
 		deletion_threshold_clause = StringUtil::Format(
-		    " AND del.delete_count/data.record_count >= %f and data.end_snapshot is null", deletion_threshold);
+		    " AND del.delete_count/data.record_count >= %f AND data.end_snapshot IS NULL", deletion_threshold);
 	}
+	// Branch-aware query using ducklake_branch_lineage and ducklake_branch_file_deletion
 	auto query = StringUtil::Format(R"(
 WITH snapshot_ranges AS (
   SELECT
-    begin_snapshot,
+    sv.branch_id as sr_branch_id,
+    sv.begin_snapshot,
     COALESCE(
-      LEAD(begin_snapshot) OVER (ORDER BY begin_snapshot),
+      LEAD(sv.begin_snapshot) OVER (PARTITION BY sv.branch_id ORDER BY sv.begin_snapshot),
       9223372036854775807
     ) AS end_snapshot,
-	schema_version
-	FROM {METADATA_CATALOG}.ducklake_schema_versions
-	ORDER BY begin_snapshot
+    sv.schema_version
+  FROM {METADATA_CATALOG}.ducklake_schema_versions sv
+  JOIN {METADATA_CATALOG}.ducklake_branch_lineage sv_bl ON sv.branch_id = sv_bl.ancestor_branch_id
+  WHERE sv_bl.branch_id = {BRANCH_ID}
 )
-SELECT %s,
+SELECT %s
 FROM {METADATA_CATALOG}.ducklake_data_file data
+JOIN {METADATA_CATALOG}.ducklake_branch_lineage bl ON data.branch_id = bl.ancestor_branch_id
 JOIN snapshot_ranges sr
   ON data.begin_snapshot >= sr.begin_snapshot AND data.begin_snapshot < sr.end_snapshot
+  AND data.branch_id = sr.sr_branch_id
 LEFT JOIN (
-	SELECT *
-    FROM {METADATA_CATALOG}.ducklake_delete_file
-    WHERE table_id=%d
-) del USING (data_file_id)
+    -- Branch-aware delete files with priority for current branch
+    SELECT delete_file_branch_id, path, path_is_relative, file_size_bytes, footer_size, encryption_key,
+           join_data_file_id, join_data_file_branch_id, delete_file_id, delete_count, begin_snapshot, end_snapshot
+    FROM (
+        SELECT del_inner.branch_id AS delete_file_branch_id, del_inner.path, del_inner.path_is_relative,
+               del_inner.file_size_bytes, del_inner.footer_size, del_inner.encryption_key,
+               del_inner.data_file_id AS join_data_file_id, del_inner.data_file_branch_id AS join_data_file_branch_id,
+               del_inner.delete_file_id, del_inner.delete_count, del_inner.begin_snapshot, del_inner.end_snapshot,
+               ROW_NUMBER() OVER (
+                   PARTITION BY del_inner.data_file_id, del_inner.data_file_branch_id
+                   ORDER BY CASE WHEN del_inner.branch_id = {BRANCH_ID} THEN 0 ELSE 1 END, del_bl.max_visible_snapshot DESC
+               ) as rn
+        FROM {METADATA_CATALOG}.ducklake_delete_file del_inner
+        JOIN {METADATA_CATALOG}.ducklake_branch_lineage del_bl ON del_inner.branch_id = del_bl.ancestor_branch_id
+        WHERE del_bl.branch_id = {BRANCH_ID}
+          AND del_inner.table_id = %d
+          AND CASE WHEN del_inner.branch_id = {BRANCH_ID} THEN {SNAPSHOT_ID} ELSE del_bl.max_visible_snapshot END >= del_inner.begin_snapshot
+          AND (del_inner.end_snapshot IS NULL OR CASE WHEN del_inner.branch_id = {BRANCH_ID} THEN {SNAPSHOT_ID} ELSE del_bl.max_visible_snapshot END < del_inner.end_snapshot)
+    ) ranked WHERE rn = 1
+) del ON data.data_file_id = del.join_data_file_id AND data.branch_id = del.join_data_file_branch_id
 LEFT JOIN (
-   SELECT data_file_id, LIST(partition_value ORDER BY partition_key_index) keys
-   FROM {METADATA_CATALOG}.ducklake_file_partition_value
-   GROUP BY data_file_id
-) partition_info USING (data_file_id)
-WHERE data.table_id=%d %s
+   -- Branch-aware partition values
+   SELECT fpv.branch_id as fpv_branch_id, fpv.data_file_id, LIST(fpv.partition_value ORDER BY fpv.partition_key_index) keys
+   FROM {METADATA_CATALOG}.ducklake_file_partition_value fpv
+   JOIN {METADATA_CATALOG}.ducklake_branch_lineage fpv_bl ON fpv.branch_id = fpv_bl.ancestor_branch_id
+   WHERE fpv_bl.branch_id = {BRANCH_ID}
+   GROUP BY fpv.branch_id, fpv.data_file_id
+) partition_info ON data.data_file_id = partition_info.data_file_id AND data.branch_id = partition_info.fpv_branch_id
+WHERE bl.branch_id = {BRANCH_ID}
+  AND data.table_id = %d
+  AND CASE WHEN data.branch_id = {BRANCH_ID} THEN {SNAPSHOT_ID} ELSE bl.max_visible_snapshot END >= data.begin_snapshot
+  AND (data.end_snapshot IS NULL OR CASE WHEN data.branch_id = {BRANCH_ID} THEN {SNAPSHOT_ID} ELSE bl.max_visible_snapshot END < data.end_snapshot)
+  AND NOT EXISTS (
+      SELECT 1 FROM {METADATA_CATALOG}.ducklake_branch_file_deletion bfd
+      WHERE bfd.branch_id = {BRANCH_ID}
+        AND bfd.ancestor_branch_id = data.branch_id
+        AND bfd.data_file_id = data.data_file_id
+        AND bfd.deleted_at_snapshot <= {SNAPSHOT_ID}
+  )
+  %s
 ORDER BY data.begin_snapshot, data.row_id_start, data.data_file_id, del.begin_snapshot
 		)",
 	                                select_list, table_id.index, table_id.index, deletion_threshold_clause);
-	auto result = transaction.Query(query);
+	auto result = transaction.Query(snapshot, query);
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("Failed to get compaction file list from DuckLake: ");
 	}
@@ -1590,7 +1626,8 @@ ORDER BY data.begin_snapshot, data.row_id_start, data.data_file_id, del.begin_sn
 	for (auto &row : *result) {
 		idx_t col_idx = 0;
 		DuckLakeCompactionFileEntry new_entry;
-		// parse the data file
+		// parse the data file - now includes branch_id first
+		new_entry.file.branch_id = BranchIndex(row.GetValue<idx_t>(col_idx++));
 		new_entry.file.id = DataFileIndex(row.GetValue<idx_t>(col_idx++));
 		new_entry.file.row_count = row.GetValue<idx_t>(col_idx++);
 		if (!row.IsNull(col_idx)) {
@@ -1627,17 +1664,19 @@ ORDER BY data.begin_snapshot, data.row_id_start, data.data_file_id, del.begin_sn
 		}
 		col_idx++;
 		new_entry.file.data = ReadDataFile(table, row, col_idx, IsEncrypted());
-		if (files.empty() || files.back().file.id != new_entry.file.id) {
-			// new file - push it into the file list
+		if (files.empty() || files.back().file.id != new_entry.file.id ||
+		    files.back().file.branch_id != new_entry.file.branch_id) {
+			// new file - push it into the file list (check both id and branch_id for uniqueness)
 			files.push_back(std::move(new_entry));
 		}
 		auto &file_entry = files.back();
-		// parse the delete file (if any)
+		// parse the delete file (if any) - now includes delete_file_branch_id first
 		if (row.IsNull(col_idx)) {
 			// no delete file
 			continue;
 		}
 		DuckLakeCompactionDeleteFileData delete_file;
+		delete_file.branch_id = BranchIndex(row.GetValue<idx_t>(col_idx++));
 		delete_file.id = DataFileIndex(row.GetValue<idx_t>(col_idx++));
 		delete_file.delete_file_id = DataFileIndex(row.GetValue<idx_t>(col_idx++));
 		delete_file.row_count = row.GetValue<idx_t>(col_idx++);
@@ -3672,55 +3711,102 @@ void DuckLakeMetadataManager::WriteMergeAdjacent(const vector<DuckLakeCompactedF
 	if (compactions.empty()) {
 		return;
 	}
-	string deleted_file_ids;
+	auto &catalog = transaction.GetCatalog();
+	auto working_branch = catalog.GetWorkingBranch();
+	auto commit_snapshot = transaction.GetSnapshot();
+
+	// Separate files into current branch files vs ancestor branch files
+	string current_branch_file_ids;
+	string ancestor_branch_deletions;
 	string scheduled_deletions;
+
 	for (auto &compaction : compactions) {
 		D_ASSERT(!compaction.path.empty());
-		// add data file id to list of files to delete
-		if (!deleted_file_ids.empty()) {
-			deleted_file_ids += ", ";
-		}
-		deleted_file_ids += to_string(compaction.source_id.index);
 
-		// schedule the file for deletion
-		if (!scheduled_deletions.empty()) {
-			scheduled_deletions += ", ";
+		if (compaction.source_branch_id.index == working_branch.index) {
+			// File belongs to current branch - will delete directly
+			if (!current_branch_file_ids.empty()) {
+				current_branch_file_ids += ", ";
+			}
+			current_branch_file_ids += to_string(compaction.source_id.index);
+
+			// Schedule the file for physical deletion (only for files we own)
+			if (!scheduled_deletions.empty()) {
+				scheduled_deletions += ", ";
+			}
+			auto path = GetRelativePath(compaction.path);
+			scheduled_deletions += StringUtil::Format("(%d, %d, %s, %s, NOW())", working_branch.index,
+			                                          compaction.source_id.index, SQLString(path.path),
+			                                          path.path_is_relative ? "true" : "false");
+		} else {
+			// File belongs to ancestor branch - insert into ducklake_branch_file_deletion
+			// This "hides" the file from this branch without affecting the ancestor
+			if (!ancestor_branch_deletions.empty()) {
+				ancestor_branch_deletions += ", ";
+			}
+			ancestor_branch_deletions += StringUtil::Format("(%d, %d, %d, %d)",
+			                                                working_branch.index,
+			                                                compaction.source_branch_id.index,
+			                                                compaction.source_id.index,
+			                                                commit_snapshot.snapshot_id);
 		}
-		auto path = GetRelativePath(compaction.path);
-		scheduled_deletions += StringUtil::Format("(%d, %s, %s, NOW())", compaction.source_id.index,
-		                                          SQLString(path.path), path.path_is_relative ? "true" : "false");
 	}
-	// for each file that has been compacted - delete it from the list of data files entirely
-	// including all other info (stats, delete files, partition values, etc)
-	vector<string> tables_to_delete_from {"ducklake_data_file", "ducklake_file_column_stats", "ducklake_delete_file",
-	                                      "ducklake_file_partition_value"};
-	for (auto &delete_from_tbl : tables_to_delete_from) {
-		auto result = transaction.Query(StringUtil::Format(R"(
+
+	// Delete files that belong to the current branch
+	if (!current_branch_file_ids.empty()) {
+		vector<string> tables_to_delete_from {"ducklake_data_file", "ducklake_file_column_stats", "ducklake_delete_file",
+		                                      "ducklake_file_partition_value"};
+		for (auto &delete_from_tbl : tables_to_delete_from) {
+			auto result = transaction.Query(StringUtil::Format(R"(
 DELETE FROM {METADATA_CATALOG}.%s
-WHERE data_file_id IN (%s);
+WHERE branch_id = %d AND data_file_id IN (%s);
 )",
-		                                                   delete_from_tbl, deleted_file_ids));
+			                                                   delete_from_tbl, working_branch.index, current_branch_file_ids));
+			if (result->HasError()) {
+				result->GetErrorObject().Throw("Failed to delete old data file information in DuckLake: ");
+			}
+		}
+
+		// Add the files we own to the deletion schedule for physical cleanup
+		scheduled_deletions =
+		    "INSERT INTO {METADATA_CATALOG}.ducklake_files_scheduled_for_deletion VALUES " + scheduled_deletions;
+		auto result = transaction.Query(scheduled_deletions);
 		if (result->HasError()) {
-			result->GetErrorObject().Throw("Failed to delete old data file information in DuckLake: ");
+			result->GetErrorObject().Throw("Failed to insert files scheduled for deletions in DuckLake: ");
 		}
 	}
-	// add the files we cleared to the deletion schedule
-	scheduled_deletions =
-	    "INSERT INTO {METADATA_CATALOG}.ducklake_files_scheduled_for_deletion VALUES " + scheduled_deletions;
-	auto result = transaction.Query(scheduled_deletions);
-	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to insert files scheduled for deletions in DuckLake: ");
+
+	// Insert deletion records for files from ancestor branches
+	if (!ancestor_branch_deletions.empty()) {
+		auto result = transaction.Query(
+		    "INSERT INTO {METADATA_CATALOG}.ducklake_branch_file_deletion VALUES " + ancestor_branch_deletions);
+		if (result->HasError()) {
+			result->GetErrorObject().Throw("Failed to insert branch file deletion records in DuckLake: ");
+		}
 	}
 }
 void DuckLakeMetadataManager::WriteDeleteRewrites(const vector<DuckLakeCompactedFileInfo> &compactions) {
 	if (compactions.empty()) {
 		return;
 	}
-	// Delete Rewrites only deletes the deletion files.
-	string deleted_file_ids;
+	auto &catalog = transaction.GetCatalog();
+	auto working_branch = catalog.GetWorkingBranch();
+	auto commit_snapshot = transaction.GetSnapshot();
+
+	// Delete Rewrites handles deletion files and data files.
+	// For branch-awareness:
+	// - Files from current branch: DELETE/UPDATE directly
+	// - Files from ancestor branches: INSERT into branch deletion tables
+
+	string current_branch_delete_file_ids;
+	string ancestor_delete_file_deletions;
+	string current_branch_data_file_ids;
+	string ancestor_data_file_deletions;
 	string scheduled_deletions;
+
 	set<idx_t> files_to_remove;
 	unordered_map<idx_t, idx_t> table_idx_last_snapshot;
+
 	// We can start by figuring out the files we can actually remove
 	for (idx_t i = compactions.size(); i > 0; i--) {
 		auto &compaction = compactions[i - 1];
@@ -3736,70 +3822,124 @@ void DuckLakeMetadataManager::WriteDeleteRewrites(const vector<DuckLakeCompacted
 		auto &compaction = compactions[i];
 		D_ASSERT(!compaction.path.empty());
 		auto path = GetRelativePath(compaction.delete_file_path);
+
 		if (files_to_remove.find(i) != files_to_remove.end()) {
-			// We only delete deletion files if they are part of the last snapshot, as they won't be required for
-			// time travel
-			if (!scheduled_deletions.empty()) {
-				scheduled_deletions += ", ";
+			// This delete file should be removed
+			if (compaction.delete_file_branch_id.index == working_branch.index) {
+				// Delete file belongs to current branch - delete directly and schedule for cleanup
+				if (!scheduled_deletions.empty()) {
+					scheduled_deletions += ", ";
+				}
+				scheduled_deletions += StringUtil::Format("(%d, %d, %s, %s, NOW())", working_branch.index,
+				                                          compaction.delete_file_id.index, SQLString(path.path),
+				                                          path.path_is_relative ? "true" : "false");
+				if (!current_branch_delete_file_ids.empty()) {
+					current_branch_delete_file_ids += ", ";
+				}
+				current_branch_delete_file_ids += to_string(compaction.delete_file_id.index);
+			} else {
+				// Delete file belongs to ancestor - insert into branch_delete_file_deletion
+				if (!ancestor_delete_file_deletions.empty()) {
+					ancestor_delete_file_deletions += ", ";
+				}
+				ancestor_delete_file_deletions += StringUtil::Format("(%d, %d, %d, %d)",
+				                                                     working_branch.index,
+				                                                     compaction.delete_file_branch_id.index,
+				                                                     compaction.delete_file_id.index,
+				                                                     commit_snapshot.snapshot_id);
 			}
-			scheduled_deletions += StringUtil::Format("(%d, %s, %s, NOW())", compaction.delete_file_id.index,
-			                                          SQLString(path.path), path.path_is_relative ? "true" : "false");
-			if (!deleted_file_ids.empty()) {
-				deleted_file_ids += ", ";
-			}
-			deleted_file_ids += to_string(compaction.delete_file_id.index);
 		} else if (!compaction.delete_file_end_snapshot.IsValid()) {
 			// if the deletion file was not removed, we still update its end_snapshot if null
-			auto result = transaction.Query(StringUtil::Format(R"(
-			UPDATE {METADATA_CATALOG}.ducklake_delete_file SET end_snapshot = %llu
-			WHERE delete_file_id = %llu;
-			)",
-			                                                   table_idx_last_snapshot[compaction.table_index.index],
-			                                                   compaction.delete_file_id.index));
-			if (result->HasError()) {
-				result->GetErrorObject().Throw("Failed to update ducklake delete file end_snapshot.");
+			// Only update if it belongs to current branch
+			if (compaction.delete_file_branch_id.index == working_branch.index) {
+				auto result = transaction.Query(StringUtil::Format(R"(
+				UPDATE {METADATA_CATALOG}.ducklake_delete_file SET end_snapshot = %llu
+				WHERE branch_id = %d AND delete_file_id = %llu;
+				)",
+				                                                   table_idx_last_snapshot[compaction.table_index.index],
+				                                                   working_branch.index,
+				                                                   compaction.delete_file_id.index));
+				if (result->HasError()) {
+					result->GetErrorObject().Throw("Failed to update ducklake delete file end_snapshot.");
+				}
 			}
-		}
-		// We must update the data file table
-		auto result = transaction.Query(StringUtil::Format(R"(
-		UPDATE {METADATA_CATALOG}.ducklake_data_file SET end_snapshot = %llu
-		WHERE data_file_id = %llu;
-		)",
-		                                                   table_idx_last_snapshot[compaction.table_index.index],
-		                                                   compaction.source_id.index));
-		if (result->HasError()) {
-			result->GetErrorObject().Throw("Failed to update snapshot end file information in DuckLake: ");
+			// For ancestor delete files, we don't update end_snapshot - they remain visible to ancestor
 		}
 
-		// update the snapshot of our newly added file
-		result = transaction.Query(StringUtil::Format(R"(
+		// Handle data file end_snapshot update
+		if (compaction.source_branch_id.index == working_branch.index) {
+			// Data file belongs to current branch - update end_snapshot directly
+			auto result = transaction.Query(StringUtil::Format(R"(
+			UPDATE {METADATA_CATALOG}.ducklake_data_file SET end_snapshot = %llu
+			WHERE branch_id = %d AND data_file_id = %llu;
+			)",
+			                                                   table_idx_last_snapshot[compaction.table_index.index],
+			                                                   working_branch.index,
+			                                                   compaction.source_id.index));
+			if (result->HasError()) {
+				result->GetErrorObject().Throw("Failed to update snapshot end file information in DuckLake: ");
+			}
+		} else {
+			// Data file belongs to ancestor - insert into branch_file_deletion
+			if (!ancestor_data_file_deletions.empty()) {
+				ancestor_data_file_deletions += ", ";
+			}
+			ancestor_data_file_deletions += StringUtil::Format("(%d, %d, %d, %d)",
+			                                                   working_branch.index,
+			                                                   compaction.source_branch_id.index,
+			                                                   compaction.source_id.index,
+			                                                   commit_snapshot.snapshot_id);
+		}
+
+		// update the snapshot of our newly added file (always belongs to current branch)
+		auto result = transaction.Query(StringUtil::Format(R"(
 			UPDATE {METADATA_CATALOG}.ducklake_data_file SET begin_snapshot = %llu
-			WHERE data_file_id = %llu;
+			WHERE branch_id = %d AND data_file_id = %llu;
 			)",
 		                                              table_idx_last_snapshot[compaction.table_index.index],
+		                                              working_branch.index,
 		                                              compaction.new_id.index));
 
 		if (result->HasError()) {
 			result->GetErrorObject().Throw("Failed to update snapshot end file information in DuckLake: ");
 		}
 	}
-	if (!deleted_file_ids.empty()) {
-		// for each file that has been rewritten - we also delete it from the ducklake_delete_file table
+
+	// Delete delete files that belong to current branch
+	if (!current_branch_delete_file_ids.empty()) {
 		auto result = transaction.Query(StringUtil::Format(R"(
 	DELETE FROM {METADATA_CATALOG}.ducklake_delete_file
-	WHERE delete_file_id IN (%s);
+	WHERE branch_id = %d AND delete_file_id IN (%s);
 	)",
-		                                                   deleted_file_ids));
+		                                                   working_branch.index, current_branch_delete_file_ids));
 		if (result->HasError()) {
-			result->GetErrorObject().Throw("Failed to delete old data file information in DuckLake: ");
+			result->GetErrorObject().Throw("Failed to delete old delete file information in DuckLake: ");
 		}
 
-		// add the files we cleared to the deletion schedule
+		// add the files we own to the deletion schedule
 		scheduled_deletions =
 		    "INSERT INTO {METADATA_CATALOG}.ducklake_files_scheduled_for_deletion VALUES " + scheduled_deletions;
 		result = transaction.Query(scheduled_deletions);
 		if (result->HasError()) {
 			result->GetErrorObject().Throw("Failed to insert files scheduled for deletions in DuckLake: ");
+		}
+	}
+
+	// Insert deletion records for delete files from ancestor branches
+	if (!ancestor_delete_file_deletions.empty()) {
+		auto result = transaction.Query(
+		    "INSERT INTO {METADATA_CATALOG}.ducklake_branch_delete_file_deletion VALUES " + ancestor_delete_file_deletions);
+		if (result->HasError()) {
+			result->GetErrorObject().Throw("Failed to insert branch delete file deletion records in DuckLake: ");
+		}
+	}
+
+	// Insert deletion records for data files from ancestor branches
+	if (!ancestor_data_file_deletions.empty()) {
+		auto result = transaction.Query(
+		    "INSERT INTO {METADATA_CATALOG}.ducklake_branch_file_deletion VALUES " + ancestor_data_file_deletions);
+		if (result->HasError()) {
+			result->GetErrorObject().Throw("Failed to insert branch file deletion records in DuckLake: ");
 		}
 	}
 }
