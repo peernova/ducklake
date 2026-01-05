@@ -120,6 +120,7 @@ CREATE TABLE {METADATA_CATALOG}.ducklake_branch_table_deletion(branch_id BIGINT 
 CREATE TABLE {METADATA_CATALOG}.ducklake_branch_schema_deletion(branch_id BIGINT NOT NULL, ancestor_branch_id BIGINT NOT NULL, schema_id BIGINT NOT NULL, deleted_at_snapshot BIGINT NOT NULL, PRIMARY KEY (branch_id, ancestor_branch_id, schema_id));
 CREATE TABLE {METADATA_CATALOG}.ducklake_branch_view_deletion(branch_id BIGINT NOT NULL, ancestor_branch_id BIGINT NOT NULL, view_id BIGINT NOT NULL, deleted_at_snapshot BIGINT NOT NULL, PRIMARY KEY (branch_id, ancestor_branch_id, view_id));
 CREATE TABLE {METADATA_CATALOG}.ducklake_branch_macro_deletion(branch_id BIGINT NOT NULL, ancestor_branch_id BIGINT NOT NULL, macro_id BIGINT NOT NULL, deleted_at_snapshot BIGINT NOT NULL, PRIMARY KEY (branch_id, ancestor_branch_id, macro_id));
+CREATE TABLE {METADATA_CATALOG}.ducklake_branch_column_deletion(branch_id BIGINT NOT NULL, ancestor_branch_id BIGINT NOT NULL, table_id BIGINT NOT NULL, column_id BIGINT NOT NULL, deleted_at_snapshot BIGINT NOT NULL, PRIMARY KEY (branch_id, ancestor_branch_id, table_id, column_id));
 
 -- Indexes for efficient lookups
 CREATE INDEX idx_snapshot_branch ON {METADATA_CATALOG}.ducklake_snapshot(branch_id, snapshot_id);
@@ -438,6 +439,14 @@ LEFT JOIN (
 	WHERE col_bl.branch_id = {BRANCH_ID}
 	  AND CASE WHEN col.branch_id = {BRANCH_ID} THEN {SNAPSHOT_ID} ELSE col_bl.max_visible_snapshot END >= col.begin_snapshot
 	  AND (col.end_snapshot IS NULL OR CASE WHEN col.branch_id = {BRANCH_ID} THEN {SNAPSHOT_ID} ELSE col_bl.max_visible_snapshot END < col.end_snapshot)
+	  AND NOT EXISTS (
+	      SELECT 1 FROM {METADATA_CATALOG}.ducklake_branch_column_deletion bcd
+	      WHERE bcd.branch_id = {BRANCH_ID}
+	        AND bcd.ancestor_branch_id = col.branch_id
+	        AND bcd.table_id = col.table_id
+	        AND bcd.column_id = col.column_id
+	        AND bcd.deleted_at_snapshot <= {SNAPSHOT_ID}
+	  )
 	ORDER BY col.table_id, col.column_id, col.branch_id DESC, col.begin_snapshot DESC
 ) col_visible ON tbl_bl.table_id = col_visible.table_id
 ORDER BY tbl_bl.table_id, col_visible.parent_column NULLS FIRST, col_visible.column_order
@@ -2183,7 +2192,12 @@ void DuckLakeMetadataManager::WriteDroppedColumns(DuckLakeSnapshot commit_snapsh
 		}
 		dropped_cols += StringUtil::Format("(%d, %d)", dropped_col.table_id.index, dropped_col.field_id.index);
 	}
-	// overwrite the snapshot for the old columns
+
+	// Branch-aware column dropping:
+	// 1. For columns on the current branch: update end_snapshot directly
+	// 2. For inherited columns (from ancestor branches): insert into ducklake_branch_column_deletion
+
+	// Step 1: Update columns that belong to the current branch
 	auto result = transaction.Query(commit_snapshot, StringUtil::Format(R"(
 WITH dropped_cols(tid, cid) AS (
 VALUES %s
@@ -2191,11 +2205,39 @@ VALUES %s
 UPDATE {METADATA_CATALOG}.ducklake_column
 SET end_snapshot = {SNAPSHOT_ID}
 FROM dropped_cols
-WHERE table_id=tid AND column_id=cid
+WHERE branch_id = {BRANCH_ID} AND table_id = tid AND column_id = cid AND end_snapshot IS NULL
 )",
 	                                                                    dropped_cols));
 	if (result->HasError()) {
-		result->GetErrorObject().Throw("Failed to drop columns in DuckLake: ");
+		result->GetErrorObject().Throw("Failed to drop columns (current branch) in DuckLake: ");
+	}
+
+	// Step 2: Insert deletion records for inherited columns from ancestor branches
+	result = transaction.Query(commit_snapshot, StringUtil::Format(R"(
+WITH dropped_cols(tid, cid) AS (
+VALUES %s
+)
+INSERT INTO {METADATA_CATALOG}.ducklake_branch_column_deletion
+(branch_id, ancestor_branch_id, table_id, column_id, deleted_at_snapshot)
+SELECT DISTINCT {BRANCH_ID}, col.branch_id, col.table_id, col.column_id, {SNAPSHOT_ID}
+FROM {METADATA_CATALOG}.ducklake_column col
+JOIN {METADATA_CATALOG}.ducklake_branch_lineage bl ON col.branch_id = bl.ancestor_branch_id
+JOIN dropped_cols dc ON col.table_id = dc.tid AND col.column_id = dc.cid
+WHERE bl.branch_id = {BRANCH_ID}
+  AND col.branch_id != {BRANCH_ID}
+  AND CASE WHEN col.branch_id = {BRANCH_ID} THEN {SNAPSHOT_ID} ELSE bl.max_visible_snapshot END >= col.begin_snapshot
+  AND (col.end_snapshot IS NULL OR CASE WHEN col.branch_id = {BRANCH_ID} THEN {SNAPSHOT_ID} ELSE bl.max_visible_snapshot END < col.end_snapshot)
+  AND NOT EXISTS (
+      SELECT 1 FROM {METADATA_CATALOG}.ducklake_branch_column_deletion existing
+      WHERE existing.branch_id = {BRANCH_ID}
+        AND existing.ancestor_branch_id = col.branch_id
+        AND existing.table_id = col.table_id
+        AND existing.column_id = col.column_id
+  )
+)",
+	                                                                    dropped_cols));
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to insert column deletion records in DuckLake: ");
 	}
 }
 

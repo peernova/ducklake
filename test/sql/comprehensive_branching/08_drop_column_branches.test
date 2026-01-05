@@ -1,0 +1,235 @@
+# name: test/sql/comprehensive_branching/08_drop_column_branches.test
+# description: Test branch-aware DROP COLUMN with COW semantics
+# group: [comprehensive_branching]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/drop_column_branches.ducklake' AS dl (METADATA_PATH '__TEST_DIR__/drop_column_branches_metadata.duckdb');
+
+# Create table on main with 4 columns
+statement ok
+CREATE TABLE dl.main.t(id INTEGER, name VARCHAR, age INTEGER, city VARCHAR);
+
+statement ok
+INSERT INTO dl.main.t VALUES (1, 'Alice', 30, 'NYC'), (2, 'Bob', 25, 'LA');
+
+# Verify initial state
+query IIII
+SELECT * FROM dl.main.t ORDER BY id;
+----
+1	Alice	30	NYC
+2	Bob	25	LA
+
+# Create feature branch
+statement ok
+CALL ducklake_create_branch('dl', 'feature');
+
+# Verify feature inherits all columns
+statement ok
+CALL ducklake_use_branch('dl', 'feature');
+
+query IIII
+SELECT * FROM dl.main.t ORDER BY id;
+----
+1	Alice	30	NYC
+2	Bob	25	LA
+
+# =================================================================
+# Test 1: DROP COLUMN on feature branch - main should be unaffected
+# =================================================================
+
+# Drop 'age' column on feature branch
+statement ok
+ALTER TABLE dl.main.t DROP COLUMN age;
+
+# Verify feature sees only 3 columns
+query III
+SELECT * FROM dl.main.t ORDER BY id;
+----
+1	Alice	NYC
+2	Bob	LA
+
+# Switch back to main
+statement ok
+CALL ducklake_use_branch('dl', 'main');
+
+# Main should still have all 4 columns
+query IIII
+SELECT * FROM dl.main.t ORDER BY id;
+----
+1	Alice	30	NYC
+2	Bob	25	LA
+
+# =================================================================
+# Test 2: DROP COLUMN on main branch - feature should still see old schema
+# =================================================================
+
+# Drop 'city' column on main branch
+statement ok
+ALTER TABLE dl.main.t DROP COLUMN city;
+
+# Main now has 3 columns (id, name, age)
+query III
+SELECT * FROM dl.main.t ORDER BY id;
+----
+1	Alice	30
+2	Bob	25
+
+# Switch to feature
+statement ok
+CALL ducklake_use_branch('dl', 'feature');
+
+# Feature should still see city (inherited from fork point), but not age (dropped locally)
+query III
+SELECT * FROM dl.main.t ORDER BY id;
+----
+1	Alice	NYC
+2	Bob	LA
+
+# =================================================================
+# Test 3: Drop same column on both branches independently
+# =================================================================
+
+# Create another branch from main for this test
+statement ok
+CALL ducklake_use_branch('dl', 'main');
+
+statement ok
+CALL ducklake_create_branch('dl', 'feature2');
+
+# Main has: id, name, age (city was dropped earlier)
+# Feature2 should inherit same schema
+statement ok
+CALL ducklake_use_branch('dl', 'feature2');
+
+query III
+SELECT * FROM dl.main.t ORDER BY id;
+----
+1	Alice	30
+2	Bob	25
+
+# Now drop 'name' on feature2
+statement ok
+ALTER TABLE dl.main.t DROP COLUMN name;
+
+query II
+SELECT * FROM dl.main.t ORDER BY id;
+----
+1	30
+2	25
+
+# Drop 'age' on main
+statement ok
+CALL ducklake_use_branch('dl', 'main');
+
+statement ok
+ALTER TABLE dl.main.t DROP COLUMN age;
+
+# Main now has: id, name
+query II
+SELECT * FROM dl.main.t ORDER BY id;
+----
+1	Alice
+2	Bob
+
+# Feature2 should still have: id, age (name was dropped on feature2, age inherited from fork point)
+statement ok
+CALL ducklake_use_branch('dl', 'feature2');
+
+query II
+SELECT * FROM dl.main.t ORDER BY id;
+----
+1	30
+2	25
+
+# =================================================================
+# Test 4: Add column after drop, then drop again
+# =================================================================
+
+statement ok
+CALL ducklake_use_branch('dl', 'main');
+
+# Main has: id, name
+# Add a new column
+statement ok
+ALTER TABLE dl.main.t ADD COLUMN email VARCHAR;
+
+statement ok
+UPDATE dl.main.t SET email = 'test@test.com';
+
+query III
+SELECT * FROM dl.main.t ORDER BY id;
+----
+1	Alice	test@test.com
+2	Bob	test@test.com
+
+# Create branch from this state
+statement ok
+CALL ducklake_create_branch('dl', 'feature3');
+
+# Drop email on main
+statement ok
+ALTER TABLE dl.main.t DROP COLUMN email;
+
+query II
+SELECT * FROM dl.main.t ORDER BY id;
+----
+1	Alice
+2	Bob
+
+# Feature3 should still have email
+statement ok
+CALL ducklake_use_branch('dl', 'feature3');
+
+query III
+SELECT * FROM dl.main.t ORDER BY id;
+----
+1	Alice	test@test.com
+2	Bob	test@test.com
+
+# =================================================================
+# Summary: Final state verification
+# =================================================================
+
+# main: id, name
+statement ok
+CALL ducklake_use_branch('dl', 'main');
+
+query II
+SELECT * FROM dl.main.t ORDER BY id;
+----
+1	Alice
+2	Bob
+
+# feature: id, name, city (dropped age)
+statement ok
+CALL ducklake_use_branch('dl', 'feature');
+
+query III
+SELECT * FROM dl.main.t ORDER BY id;
+----
+1	Alice	NYC
+2	Bob	LA
+
+# feature2: id, age (dropped name)
+statement ok
+CALL ducklake_use_branch('dl', 'feature2');
+
+query II
+SELECT * FROM dl.main.t ORDER BY id;
+----
+1	30
+2	25
+
+# feature3: id, name, email
+statement ok
+CALL ducklake_use_branch('dl', 'feature3');
+
+query III
+SELECT * FROM dl.main.t ORDER BY id;
+----
+1	Alice	test@test.com
+2	Bob	test@test.com
