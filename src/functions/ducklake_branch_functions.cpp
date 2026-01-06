@@ -287,6 +287,15 @@ static void CreateBranchFunction(ClientContext &context, TableFunctionInput &dat
 	    "WHERE branch_id = %lld",
 	    new_branch_id, parent_branch_id));
 
+	// Copy parent's column deletions (so child inherits dropped columns from ancestors)
+	transaction.Query(StringUtil::Format(
+	    "INSERT INTO {METADATA_CATALOG}.ducklake_branch_column_deletion "
+	    "(branch_id, ancestor_branch_id, table_id, column_id, deleted_at_snapshot) "
+	    "SELECT %lld, ancestor_branch_id, table_id, column_id, deleted_at_snapshot "
+	    "FROM {METADATA_CATALOG}.ducklake_branch_column_deletion "
+	    "WHERE branch_id = %lld",
+	    new_branch_id, parent_branch_id));
+
 	// Copy parent's table stats (so child starts with same counts as parent at fork point)
 	transaction.Query(StringUtil::Format(
 	    "INSERT INTO {METADATA_CATALOG}.ducklake_table_stats "
