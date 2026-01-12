@@ -195,6 +195,16 @@ static void CreateBranchFunction(ClientContext &context, TableFunctionInput &dat
 	                        ? NumericCast<int64_t>(bind_data.fork_snapshot_id.GetIndex())
 	                        : parent_head;
 
+	// Check if branch name already exists
+	auto dup_result = transaction.Query(StringUtil::Format(
+	    "SELECT COUNT(*) FROM {METADATA_CATALOG}.ducklake_branch "
+	    "WHERE branch_name = '%s' AND status = 'active'",
+	    bind_data.branch_name));
+	auto dup_chunk = dup_result->Fetch();
+	if (dup_chunk && dup_chunk->GetValue(0, 0).GetValue<int64_t>() > 0) {
+		throw InvalidInputException("Branch '%s' already exists", bind_data.branch_name);
+	}
+
 	// Get next branch id - use explicit BIGINT cast for -1 to ensure consistent types
 	auto max_result = transaction.Query("SELECT COALESCE(MAX(branch_id), CAST(-1 AS BIGINT)) + 1 FROM {METADATA_CATALOG}.ducklake_branch");
 	auto max_chunk = max_result->Fetch();
