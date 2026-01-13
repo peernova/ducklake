@@ -1,0 +1,275 @@
+# name: test/sql/comprehensive_branching/test_branch_from_snapshot.test
+# description: Test creating branches from specific snapshots (time travel branching)
+# group: [comprehensive_branching]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+# ===========================================
+# Test: Branch from specific snapshot
+# ===========================================
+#
+# This test verifies that creating a branch from a specific snapshot
+# correctly limits data visibility to that point in time.
+#
+# BRANCH TREE STRUCTURE:
+# ======================
+#
+#                                     MAIN (branch_id=0)
+#                                     snapshots: 0 → 1 → 2 → 3 → 4 → 5 (HEAD)
+#                                                     │       │
+#                             ┌───────────────────────┘       └───────────────┐
+#                             │                                               │
+#                         fork@snap2                                      fork@snap4
+#                             │                                               │
+#                             ▼                                               ▼
+#                         BRANCH_A (branch_id=1)                          BRANCH_B (branch_id=2)
+#                         head starts: 2                                  head starts: 4
+#                         snapshots: 2 → 3 → 4 (HEAD)                     snapshots: 4 → 5 (HEAD)
+#                                         │
+#                                         │ fork@snap3
+#                                         ▼
+#                                   BRANCH_A_CHILD (branch_id=3)
+#                                   head starts: 3
+#                                   snapshots: 3 → 4 (HEAD)
+#
+#
+# TEST: Create BRANCH_A_OLD from BRANCH_A@snap2
+# =============================================
+#   This branch should only see what branch_A had at snap2,
+#   which is just the inherited data from main@snap2.
+#
+#
+# EXPECTED VISIBILITY:
+# ====================
+# Branch          │ Values visible
+# ────────────────┼─────────────────────────
+# main            │ 10, 20, 30, 40, 50
+# branch_A        │ 10, 20, 100, 200
+# branch_A_child  │ 10, 20, 100, 999
+# branch_B        │ 10, 20, 30, 40, 500
+# branch_A_old    │ 10, 20 only (from branch_A@snap2)
+#
+#
+# NOTE ON STATS:
+# ==============
+# When branching from an old snapshot, table-level stats are copied from
+# parent's CURRENT stats, not snapshot-specific stats. This is consistent
+# with time travel query behavior. Stats are optimizer hints only and do
+# not affect query correctness. See docs/use_of_stats_and_filter_push_down.md
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=__TEST_DATABASE_NAME__ host=localhost port=5432 user=postgres password=postgres' AS db (DATA_PATH '__TEST_DIR__/branch_from_snapshot_data')
+
+statement ok
+USE db
+
+# ===========================================
+# SETUP: Build the branch tree
+# ===========================================
+
+# MAIN: snap 1 - create table
+statement ok
+CREATE TABLE products (id INT, val INT)
+
+# MAIN: snap 2 - insert initial data
+statement ok
+INSERT INTO products VALUES (1, 10), (2, 20)
+
+# Create BRANCH_A from main (at snap 2)
+statement ok
+CALL ducklake_create_branch('db', 'branch_A')
+
+# MAIN: snap 3, 4 - more inserts
+statement ok
+INSERT INTO products VALUES (3, 30)
+
+statement ok
+INSERT INTO products VALUES (4, 40)
+
+# Create BRANCH_B from main (at snap 4)
+statement ok
+CALL ducklake_create_branch('db', 'branch_B')
+
+# MAIN: snap 5
+statement ok
+INSERT INTO products VALUES (5, 50)
+
+# Switch to BRANCH_A and add data
+statement ok
+CALL ducklake_use_branch('db', 'branch_A')
+
+# branch_A snap 3
+statement ok
+INSERT INTO products VALUES (6, 100)
+
+# Create BRANCH_A_CHILD from branch_A (at snap 3)
+statement ok
+CALL ducklake_create_branch('db', 'branch_A_child')
+
+# branch_A snap 4
+statement ok
+INSERT INTO products VALUES (7, 200)
+
+# Switch to branch_A_child and add data
+statement ok
+CALL ducklake_use_branch('db', 'branch_A_child')
+
+# branch_A_child snap 4
+statement ok
+INSERT INTO products VALUES (8, 999)
+
+# Switch to branch_B and add data
+statement ok
+CALL ducklake_use_branch('db', 'branch_B')
+
+# branch_B snap 5
+statement ok
+INSERT INTO products VALUES (9, 500)
+
+# ===========================================
+# TEST: Create BRANCH_A_OLD from branch_A@snap2
+# This is the key test - branching from an old snapshot
+# ===========================================
+statement ok
+CALL ducklake_create_branch('db', 'branch_A_old', 'branch_A', 2)
+
+# ===========================================
+# VERIFY: Branch structure
+# ===========================================
+query ITIII rowsort
+SELECT branch_id, branch_name, parent_branch_id, fork_snapshot_id, head_snapshot_id
+FROM ducklake_branches('db') ORDER BY branch_id
+----
+0	main	NULL	NULL	5
+1	branch_A	0	2	4
+2	branch_B	0	4	5
+3	branch_A_child	1	3	4
+4	branch_A_old	1	2	2
+
+# ===========================================
+# VERIFY: Data visibility on each branch
+# ===========================================
+
+# Main branch: should see 10, 20, 30, 40, 50
+statement ok
+CALL ducklake_use_branch('db', 'main')
+
+query I rowsort
+SELECT val FROM products ORDER BY val
+----
+10
+20
+30
+40
+50
+
+# Branch A: should see 10, 20, 100, 200
+statement ok
+CALL ducklake_use_branch('db', 'branch_A')
+
+query I rowsort
+SELECT val FROM products ORDER BY val
+----
+10
+20
+100
+200
+
+# Branch A Child: should see 10, 20, 100, 999
+statement ok
+CALL ducklake_use_branch('db', 'branch_A_child')
+
+query I rowsort
+SELECT val FROM products ORDER BY val
+----
+10
+20
+100
+999
+
+# Branch B: should see 10, 20, 30, 40, 500
+statement ok
+CALL ducklake_use_branch('db', 'branch_B')
+
+query I rowsort
+SELECT val FROM products ORDER BY val
+----
+10
+20
+30
+40
+500
+
+# Branch A Old (THE KEY TEST): should ONLY see 10, 20
+# This branch was created from branch_A@snap2, which only had
+# the inherited data from main (10, 20), not branch_A's later inserts
+statement ok
+CALL ducklake_use_branch('db', 'branch_A_old')
+
+query I rowsort
+SELECT val FROM products ORDER BY val
+----
+10
+20
+
+# ===========================================
+# ADDITIONAL TEST: Verify branch_A_old can make its own changes
+# and they don't affect other branches
+# ===========================================
+statement ok
+INSERT INTO products VALUES (10, 777)
+
+query I rowsort
+SELECT val FROM products ORDER BY val
+----
+10
+20
+777
+
+# Verify branch_A still has its original data
+statement ok
+CALL ducklake_use_branch('db', 'branch_A')
+
+query I rowsort
+SELECT val FROM products ORDER BY val
+----
+10
+20
+100
+200
+
+# ===========================================
+# ADDITIONAL TEST: Create another branch from branch_A_old
+# to test grandchild from time-travel branch
+# ===========================================
+statement ok
+CALL ducklake_use_branch('db', 'branch_A_old')
+
+statement ok
+CALL ducklake_create_branch('db', 'branch_A_old_child')
+
+statement ok
+CALL ducklake_use_branch('db', 'branch_A_old_child')
+
+# Should see: 10, 20, 777 (inherited from branch_A_old)
+query I rowsort
+SELECT val FROM products ORDER BY val
+----
+10
+20
+777
+
+statement ok
+INSERT INTO products VALUES (11, 888)
+
+query I rowsort
+SELECT val FROM products ORDER BY val
+----
+10
+20
+777
+888

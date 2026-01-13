@@ -307,6 +307,21 @@ static void CreateBranchFunction(ClientContext &context, TableFunctionInput &dat
 	    new_branch_id, parent_branch_id));
 
 	// Copy parent's table stats (so child starts with same counts as parent at fork point)
+	//
+	// DESIGN NOTE: When branching from an old snapshot (fork_snapshot_id < parent_head),
+	// we still copy parent's CURRENT stats, not stats as of fork_snapshot_id.
+	// This is consistent with time travel query behavior - time travel queries also use
+	// current branch stats for cardinality estimation, not snapshot-specific stats.
+	//
+	// Rationale:
+	// - Table-level stats (record_count, min/max) are optimizer hints only
+	// - They do NOT affect query correctness, only query plan selection
+	// - File-level stats (in ducklake_file_column_stats) ARE used for filter pushdown
+	//   and those are immutable per-file, so filter pushdown remains accurate
+	// - Stats will naturally improve as new data is inserted on the child branch
+	// - Recomputing accurate stats from visible files would be expensive and complex
+	//
+	// See docs/use_of_stats_and_filter_push_down.md for detailed explanation.
 	transaction.Query(StringUtil::Format(
 	    "INSERT INTO {METADATA_CATALOG}.ducklake_table_stats "
 	    "(branch_id, table_id, record_count, next_row_id, file_size_bytes) "
@@ -315,7 +330,7 @@ static void CreateBranchFunction(ClientContext &context, TableFunctionInput &dat
 	    "WHERE branch_id = %lld",
 	    new_branch_id, parent_branch_id));
 
-	// Copy parent's table column stats
+	// Copy parent's table column stats (same design note as above applies)
 	transaction.Query(StringUtil::Format(
 	    "INSERT INTO {METADATA_CATALOG}.ducklake_table_column_stats "
 	    "(branch_id, table_id, column_id, contains_null, contains_nan, min_value, max_value, extra_stats) "
