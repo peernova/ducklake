@@ -1,0 +1,1092 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DuckLake XVA Desk Demo</title>
+    <style>
+        :root {
+            --bg-primary: #f5f5f5;
+            --bg-secondary: #e8e8e8;
+            --bg-code: #2d2d2d;
+            --text-primary: #333;
+            --text-secondary: #666;
+            --accent: #5a7a8a;
+            --accent-green: #6b8e6b;
+            --accent-orange: #a08060;
+            --accent-red: #a07070;
+            --accent-purple: #7a6a8a;
+            --accent-blue: #5a8aaa;
+            --border: #ccc;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            line-height: 1.6;
+            padding: 20px;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            color: var(--accent);
+            border-bottom: 3px solid var(--accent);
+            padding-bottom: 15px;
+            margin-bottom: 30px;
+            font-size: 2.5em;
+        }
+
+        h2 {
+            color: var(--accent-green);
+            margin-top: 50px;
+            margin-bottom: 20px;
+            padding: 10px 15px;
+            background: var(--bg-secondary);
+            border-left: 4px solid var(--accent-green);
+            border-radius: 0 8px 8px 0;
+        }
+
+        h3 {
+            color: var(--accent-orange);
+            margin-top: 30px;
+            margin-bottom: 15px;
+        }
+
+        h4 {
+            color: var(--accent-purple);
+            margin-top: 20px;
+            margin-bottom: 10px;
+        }
+
+        p {
+            margin-bottom: 15px;
+            color: var(--text-secondary);
+        }
+
+        .overview-box {
+            background: linear-gradient(135deg, #fff, #f0f0f0);
+            border: 1px solid var(--accent);
+            border-radius: 12px;
+            padding: 25px;
+            margin: 20px 0;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+        }
+
+        .overview-box h3 {
+            color: var(--accent);
+            margin-top: 0;
+        }
+
+        .benefit-list {
+            list-style: none;
+            padding: 0;
+        }
+
+        .benefit-list li {
+            padding: 10px 0 10px 35px;
+            position: relative;
+            color: var(--text-primary);
+        }
+
+        .benefit-list li::before {
+            content: "\2713";
+            position: absolute;
+            left: 0;
+            color: var(--accent-green);
+            font-weight: bold;
+            font-size: 1.2em;
+        }
+
+        pre {
+            background: #2d2d2d;
+            border: 1px solid #444;
+            border-radius: 8px;
+            padding: 20px;
+            overflow-x: auto;
+            margin: 15px 0;
+            font-family: 'Fira Code', 'Consolas', monospace;
+            font-size: 14px;
+            color: #d4d4d4;
+        }
+
+        code {
+            color: #5a7a8a;
+            font-family: 'Fira Code', 'Consolas', monospace;
+            background: #e0e0e0;
+            padding: 2px 6px;
+            border-radius: 4px;
+        }
+
+        pre code {
+            color: #d4d4d4;
+            background: transparent;
+            padding: 0;
+        }
+
+        .sql-keyword { color: #c586c0; font-weight: bold; }
+        .sql-comment { color: #7a9a7a; font-style: italic; }
+        .sql-string { color: #ce9178; }
+        .sql-number { color: #b5cea8; }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+            background: #fff;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+        }
+
+        th {
+            background: #5a7a8a;
+            color: #fff;
+            padding: 15px;
+            text-align: left;
+            font-weight: 600;
+        }
+
+        td {
+            padding: 12px 15px;
+            border-bottom: 1px solid #e0e0e0;
+            color: var(--text-primary);
+        }
+
+        tr:hover {
+            background: rgba(90, 122, 138, 0.08);
+        }
+
+        .terminal-layout {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin: 20px 0;
+        }
+
+        .terminal {
+            background: #fff;
+            border: 1px solid #ddd;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+        }
+
+        .terminal-header {
+            padding: 10px 15px;
+            font-weight: bold;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .terminal-header.prod { background: #6b8e6b; color: #fff; }
+        .terminal-header.model { background: #5a7a8a; color: #fff; }
+        .terminal-header.whatif { background: #a08060; color: #fff; }
+        .terminal-header.stress { background: #a07070; color: #fff; }
+
+        .terminal-body {
+            padding: 15px;
+            font-family: 'Fira Code', 'Consolas', monospace;
+            font-size: 13px;
+            max-height: 400px;
+            overflow-y: auto;
+            background: #2d2d2d;
+            color: #d4d4d4;
+        }
+
+        .key-point {
+            background: #e8f0e8;
+            border-left: 4px solid #6b8e6b;
+            padding: 15px 20px;
+            margin: 20px 0;
+            border-radius: 0 8px 8px 0;
+        }
+
+        .key-point strong { color: #5a7a5a; }
+
+        .warning {
+            background: #f5f0e8;
+            border-left: 4px solid #a08060;
+            padding: 15px 20px;
+            margin: 20px 0;
+            border-radius: 0 8px 8px 0;
+        }
+
+        .warning strong { color: #8a6a4a; }
+
+        .use-case {
+            background: #e8f0f5;
+            border-left: 4px solid #5a8aaa;
+            padding: 15px 20px;
+            margin: 20px 0;
+            border-radius: 0 8px 8px 0;
+        }
+
+        .use-case strong { color: #4a6a8a; }
+
+        .phase {
+            background: #fff;
+            border-radius: 12px;
+            padding: 25px;
+            margin: 30px 0;
+            border: 1px solid #ddd;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+        }
+
+        .phase-header {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .phase-number {
+            background: #5a7a8a;
+            color: #fff;
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 1.5em;
+        }
+
+        .phase-title {
+            color: #4a6a7a;
+            font-size: 1.5em;
+            margin: 0;
+        }
+
+        .goal {
+            background: #f0f5f8;
+            border: 1px solid #b0c0c8;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+
+        .goal strong { color: #4a6a7a; }
+
+        .schema-card {
+            background: #f8f8f8;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 15px;
+            margin: 10px 0;
+        }
+
+        .schema-card h4 {
+            margin-top: 0;
+            color: var(--accent);
+            border-bottom: 1px solid #ddd;
+            padding-bottom: 8px;
+        }
+
+        .schema-card .partition-info {
+            font-size: 0.85em;
+            color: #888;
+            font-style: italic;
+        }
+
+        .comparison-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin: 20px 0;
+        }
+
+        .comparison-card {
+            background: #fff;
+            border-radius: 8px;
+            padding: 20px;
+            border: 1px solid #ddd;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+        }
+
+        .comparison-card h4 {
+            margin-top: 0;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #e0e0e0;
+        }
+
+        .comparison-card ul {
+            color: var(--text-secondary);
+            padding-left: 20px;
+        }
+
+        .comparison-card li { margin: 8px 0; }
+
+        .branch-tree {
+            font-family: 'Fira Code', monospace;
+            background: #2d2d2d;
+            color: #d4d4d4;
+            padding: 20px;
+            border-radius: 8px;
+            line-height: 1.8;
+        }
+
+        .branch-main { color: #8ab88a; }
+        .branch-model { color: #8ab8c8; }
+        .branch-whatif { color: #c8a888; }
+        .branch-stress { color: #c88888; }
+
+        .toc {
+            background: #fff;
+            border-radius: 12px;
+            padding: 25px;
+            margin: 30px 0;
+            border: 1px solid #ddd;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+        }
+
+        .toc h3 {
+            margin-top: 0;
+            color: #4a6a7a;
+        }
+
+        .toc-list {
+            list-style: none;
+            columns: 2;
+            column-gap: 40px;
+        }
+
+        .toc-list li {
+            padding: 8px 0;
+            border-bottom: 1px solid #e8e8e8;
+        }
+
+        .toc-list a {
+            color: #666;
+            text-decoration: none;
+            transition: color 0.2s;
+        }
+
+        .toc-list a:hover { color: #4a6a7a; }
+
+        .value-box {
+            background: linear-gradient(135deg, #f0f8f0, #e8f0e8);
+            border: 1px solid #8ab88a;
+            border-radius: 12px;
+            padding: 25px;
+            margin: 20px 0;
+        }
+
+        .value-box h3 {
+            color: #5a7a5a;
+            margin-top: 0;
+        }
+
+        .no-value-box {
+            background: linear-gradient(135deg, #f8f0f0, #f0e8e8);
+            border: 1px solid #c88888;
+            border-radius: 12px;
+            padding: 25px;
+            margin: 20px 0;
+        }
+
+        .no-value-box h3 {
+            color: #8a5a5a;
+            margin-top: 0;
+        }
+
+        @media (max-width: 768px) {
+            .terminal-layout { grid-template-columns: 1fr; }
+            .toc-list { columns: 1; }
+        }
+    </style>
+</head>
+<body>
+
+<h1>DuckLake for XVA Desk: Branching for Derivatives Pricing & Risk</h1>
+
+<div class="overview-box">
+    <h3>Scenario Overview</h3>
+    <p>An XVA desk managing swaptions, caps, floors, and vanilla options needs to run parallel analyses without disrupting production EOD valuations. Teams need isolated environments for model testing, what-if analysis, and stress scenarios.</p>
+
+    <h4>Key Benefits for XVA/Derivatives</h4>
+    <ul class="benefit-list">
+        <li><strong>Model Testing</strong> - Test new SABR calibrations without affecting production XVA</li>
+        <li><strong>What-If Analysis</strong> - Add hypothetical trades, see incremental CVA impact</li>
+        <li><strong>Stress Testing</strong> - Shock curves and spreads, compare to base case</li>
+        <li><strong>Audit Trail</strong> - Time travel to any historical valuation date</li>
+        <li><strong>Zero Data Copy</strong> - Branches share underlying Parquet files</li>
+    </ul>
+</div>
+
+<div class="toc">
+    <h3>Table of Contents</h3>
+    <ul class="toc-list">
+        <li><a href="#scenario">Use Case Scenario</a></li>
+        <li><a href="#schema">Schema Design</a></li>
+        <li><a href="#setup">Terminal Setup</a></li>
+        <li><a href="#phase1">Phase 1: Production Data Setup</a></li>
+        <li><a href="#phase2">Phase 2: Create Team Branches</a></li>
+        <li><a href="#phase3">Phase 3: Model Testing Branch</a></li>
+        <li><a href="#phase4">Phase 4: What-If Trades Branch</a></li>
+        <li><a href="#phase5">Phase 5: Stress Testing Branch</a></li>
+        <li><a href="#phase6">Phase 6: Cross-Branch Comparison</a></li>
+        <li><a href="#value">Value Assessment</a></li>
+    </ul>
+</div>
+
+<h2 id="scenario">Use Case Scenario</h2>
+
+<p>A derivatives desk runs daily XVA calculations. Different teams need to work in parallel:</p>
+
+<table>
+    <thead>
+        <tr>
+            <th>Team</th>
+            <th>Branch</th>
+            <th>Purpose</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><strong>Production</strong></td>
+            <td>main</td>
+            <td>EOD valuations, official XVA numbers</td>
+        </tr>
+        <tr>
+            <td><strong>Quants</strong></td>
+            <td>model_test</td>
+            <td>Testing new SABR/HW1F calibrations</td>
+        </tr>
+        <tr>
+            <td><strong>Sales/Structuring</strong></td>
+            <td>what_if_trades</td>
+            <td>Pre-trade CVA analysis for new deals</td>
+        </tr>
+        <tr>
+            <td><strong>Risk</strong></td>
+            <td>stress_test</td>
+            <td>Stressed market scenarios (rates +100bp, spreads widen)</td>
+        </tr>
+    </tbody>
+</table>
+
+<h2 id="schema">Schema Design</h2>
+
+<div class="comparison-grid">
+    <div class="schema-card">
+        <h4>reference (No Partitions)</h4>
+        <p>Static data - counterparties, products</p>
+        <code>counterparties, products</code>
+        <p class="partition-info">No partitions - small, static tables</p>
+    </div>
+    <div class="schema-card">
+        <h4>market_data (Partitioned)</h4>
+        <p>Daily curves, vols, spreads</p>
+        <code>ir_curves, vol_surfaces, credit_spreads</code>
+        <p class="partition-info">Partitioned by: curve_date, vol_date, spread_date</p>
+    </div>
+    <div class="schema-card">
+        <h4>trades (Partitioned)</h4>
+        <p>Trade/position book</p>
+        <code>positions</code>
+        <p class="partition-info">Partitioned by: trade_date, asset_class</p>
+    </div>
+    <div class="schema-card">
+        <h4>models (Partitioned)</h4>
+        <p>Calibrated model parameters</p>
+        <code>sabr_params, hw1f_params</code>
+        <p class="partition-info">Partitioned by: calib_date</p>
+    </div>
+    <div class="schema-card">
+        <h4>results (Partitioned)</h4>
+        <p>XVA and Greeks output</p>
+        <code>xva_daily, greeks</code>
+        <p class="partition-info">Partitioned by: valuation_date, measure</p>
+    </div>
+</div>
+
+<h2 id="setup">Demo Setup: 4 Terminals</h2>
+
+<div class="terminal-layout">
+    <div class="terminal">
+        <div class="terminal-header prod">Terminal 1: PRODUCTION (main)</div>
+        <div class="terminal-body">Official EOD valuations. Source of truth.</div>
+    </div>
+    <div class="terminal">
+        <div class="terminal-header model">Terminal 2: QUANT (model_test)</div>
+        <div class="terminal-body">Testing new SABR calibration with higher vol-of-vol.</div>
+    </div>
+    <div class="terminal">
+        <div class="terminal-header whatif">Terminal 3: SALES (what_if_trades)</div>
+        <div class="terminal-body">Pre-trade analysis: 500M EUR swaption with pension fund.</div>
+    </div>
+    <div class="terminal">
+        <div class="terminal-header stress">Terminal 4: RISK (stress_test)</div>
+        <div class="terminal-body">Stress scenario: rates +100bp, spreads +50%.</div>
+    </div>
+</div>
+
+<!-- PHASE 1 -->
+<div class="phase" id="phase1">
+    <div class="phase-header">
+        <div class="phase-number">1</div>
+        <h3 class="phase-title">Production Data Setup</h3>
+    </div>
+
+    <div class="goal">
+        <strong>Goal:</strong> Create the production environment with reference data, market data, trades, models, and XVA results.
+    </div>
+
+    <h4>Terminal 1 (Production) - Full Setup</h4>
+    <pre><code><span class="sql-comment">-- Connect to DuckLake with PostgreSQL metadata backend</span>
+<span class="sql-keyword">LOAD</span> <span class="sql-string">'/Users/nareshbalusu/Downloads/claude/ducklake/ducklake_branching/postgres_scanner/build/release/extension/postgres_scanner/postgres_scanner.duckdb_extension'</span>;
+<span class="sql-keyword">LOAD</span> <span class="sql-string">'/Users/nareshbalusu/Downloads/claude/ducklake/ducklake_branching/ducklake/build/release/extension/ducklake/ducklake.duckdb_extension'</span>;
+<span class="sql-keyword">ATTACH</span> <span class="sql-string">'ducklake:postgres:dbname=xva_desk host=localhost port=5433 user=postgres password=postgres'</span>
+    <span class="sql-keyword">AS</span> db (<span class="sql-keyword">DATA_PATH</span> <span class="sql-string">'/tmp/xva_desk'</span>);
+<span class="sql-keyword">USE</span> db;
+
+<span class="sql-comment">-- ============================================================================</span>
+<span class="sql-comment">-- SCHEMA: reference (static data, no partitions)</span>
+<span class="sql-comment">-- ============================================================================</span>
+<span class="sql-keyword">CREATE SCHEMA</span> reference;
+
+<span class="sql-keyword">CREATE TABLE</span> reference.counterparties (
+    cpty_id <span class="sql-keyword">VARCHAR</span>,
+    legal_name <span class="sql-keyword">VARCHAR</span>,
+    rating <span class="sql-keyword">VARCHAR</span>,
+    sector <span class="sql-keyword">VARCHAR</span>,
+    netting_agreement <span class="sql-keyword">BOOLEAN</span>
+);
+
+<span class="sql-keyword">INSERT INTO</span> reference.counterparties <span class="sql-keyword">VALUES</span>
+    (<span class="sql-string">'CPTY001'</span>, <span class="sql-string">'Goldman Sachs Intl'</span>, <span class="sql-string">'A+'</span>, <span class="sql-string">'Bank'</span>, <span class="sql-keyword">true</span>),
+    (<span class="sql-string">'CPTY002'</span>, <span class="sql-string">'JPMorgan Chase'</span>, <span class="sql-string">'AA-'</span>, <span class="sql-string">'Bank'</span>, <span class="sql-keyword">true</span>),
+    (<span class="sql-string">'CPTY003'</span>, <span class="sql-string">'Shell Energy'</span>, <span class="sql-string">'BBB+'</span>, <span class="sql-string">'Corporate'</span>, <span class="sql-keyword">true</span>),
+    (<span class="sql-string">'CPTY004'</span>, <span class="sql-string">'Lufthansa AG'</span>, <span class="sql-string">'BB'</span>, <span class="sql-string">'Corporate'</span>, <span class="sql-keyword">false</span>),
+    (<span class="sql-string">'CPTY005'</span>, <span class="sql-string">'Sovereign Wealth Fund'</span>, <span class="sql-string">'AAA'</span>, <span class="sql-string">'Sovereign'</span>, <span class="sql-keyword">true</span>);
+
+<span class="sql-keyword">CREATE TABLE</span> reference.products (
+    product_type <span class="sql-keyword">VARCHAR</span>,
+    asset_class <span class="sql-keyword">VARCHAR</span>,
+    model_type <span class="sql-keyword">VARCHAR</span>
+);
+
+<span class="sql-keyword">INSERT INTO</span> reference.products <span class="sql-keyword">VALUES</span>
+    (<span class="sql-string">'IR_SWAP'</span>, <span class="sql-string">'Rates'</span>, <span class="sql-string">'HW1F'</span>),
+    (<span class="sql-string">'SWAPTION'</span>, <span class="sql-string">'Rates'</span>, <span class="sql-string">'SABR'</span>),
+    (<span class="sql-string">'CAP'</span>, <span class="sql-string">'Rates'</span>, <span class="sql-string">'SABR'</span>),
+    (<span class="sql-string">'FLOOR'</span>, <span class="sql-string">'Rates'</span>, <span class="sql-string">'SABR'</span>),
+    (<span class="sql-string">'FX_OPTION'</span>, <span class="sql-string">'FX'</span>, <span class="sql-string">'BS'</span>),
+    (<span class="sql-string">'CDS'</span>, <span class="sql-string">'Credit'</span>, <span class="sql-string">'ISDA'</span>);
+
+<span class="sql-comment">-- ============================================================================</span>
+<span class="sql-comment">-- SCHEMA: market_data (partitioned by date)</span>
+<span class="sql-comment">-- ============================================================================</span>
+<span class="sql-keyword">CREATE SCHEMA</span> market_data;
+
+<span class="sql-keyword">CREATE TABLE</span> market_data.ir_curves (
+    curve_date <span class="sql-keyword">DATE</span>,
+    curve_id <span class="sql-keyword">VARCHAR</span>,
+    ccy <span class="sql-keyword">VARCHAR</span>,
+    tenor <span class="sql-keyword">VARCHAR</span>,
+    rate <span class="sql-keyword">DECIMAL</span>(<span class="sql-number">10</span>,<span class="sql-number">6</span>)
+);
+<span class="sql-keyword">ALTER TABLE</span> market_data.ir_curves <span class="sql-keyword">SET PARTITIONED BY</span> (curve_date);
+
+<span class="sql-keyword">INSERT INTO</span> market_data.ir_curves <span class="sql-keyword">VALUES</span>
+    (<span class="sql-string">'2024-01-15'</span>, <span class="sql-string">'USD_OIS'</span>, <span class="sql-string">'USD'</span>, <span class="sql-string">'1Y'</span>, <span class="sql-number">0.0525</span>),
+    (<span class="sql-string">'2024-01-15'</span>, <span class="sql-string">'USD_OIS'</span>, <span class="sql-string">'USD'</span>, <span class="sql-string">'5Y'</span>, <span class="sql-number">0.0485</span>),
+    (<span class="sql-string">'2024-01-15'</span>, <span class="sql-string">'USD_OIS'</span>, <span class="sql-string">'USD'</span>, <span class="sql-string">'10Y'</span>, <span class="sql-number">0.0465</span>),
+    (<span class="sql-string">'2024-01-15'</span>, <span class="sql-string">'EUR_ESTR'</span>, <span class="sql-string">'EUR'</span>, <span class="sql-string">'1Y'</span>, <span class="sql-number">0.0390</span>),
+    (<span class="sql-string">'2024-01-15'</span>, <span class="sql-string">'EUR_ESTR'</span>, <span class="sql-string">'EUR'</span>, <span class="sql-string">'5Y'</span>, <span class="sql-number">0.0285</span>),
+    (<span class="sql-string">'2024-01-16'</span>, <span class="sql-string">'USD_OIS'</span>, <span class="sql-string">'USD'</span>, <span class="sql-string">'1Y'</span>, <span class="sql-number">0.0528</span>),
+    (<span class="sql-string">'2024-01-16'</span>, <span class="sql-string">'USD_OIS'</span>, <span class="sql-string">'USD'</span>, <span class="sql-string">'5Y'</span>, <span class="sql-number">0.0488</span>),
+    (<span class="sql-string">'2024-01-16'</span>, <span class="sql-string">'EUR_ESTR'</span>, <span class="sql-string">'EUR'</span>, <span class="sql-string">'1Y'</span>, <span class="sql-number">0.0392</span>);
+
+<span class="sql-keyword">CREATE TABLE</span> market_data.vol_surfaces (
+    vol_date <span class="sql-keyword">DATE</span>,
+    underlying <span class="sql-keyword">VARCHAR</span>,
+    expiry <span class="sql-keyword">VARCHAR</span>,
+    strike_type <span class="sql-keyword">VARCHAR</span>,
+    vol <span class="sql-keyword">DECIMAL</span>(<span class="sql-number">8</span>,<span class="sql-number">4</span>)
+);
+<span class="sql-keyword">ALTER TABLE</span> market_data.vol_surfaces <span class="sql-keyword">SET PARTITIONED BY</span> (vol_date, underlying);
+
+<span class="sql-keyword">INSERT INTO</span> market_data.vol_surfaces <span class="sql-keyword">VALUES</span>
+    (<span class="sql-string">'2024-01-15'</span>, <span class="sql-string">'USD_SWAPTION'</span>, <span class="sql-string">'1Y'</span>, <span class="sql-string">'ATM'</span>, <span class="sql-number">0.4520</span>),
+    (<span class="sql-string">'2024-01-15'</span>, <span class="sql-string">'USD_SWAPTION'</span>, <span class="sql-string">'5Y'</span>, <span class="sql-string">'ATM'</span>, <span class="sql-number">0.3180</span>),
+    (<span class="sql-string">'2024-01-15'</span>, <span class="sql-string">'EUR_SWAPTION'</span>, <span class="sql-string">'1Y'</span>, <span class="sql-string">'ATM'</span>, <span class="sql-number">0.5210</span>),
+    (<span class="sql-string">'2024-01-16'</span>, <span class="sql-string">'USD_SWAPTION'</span>, <span class="sql-string">'1Y'</span>, <span class="sql-string">'ATM'</span>, <span class="sql-number">0.4580</span>),
+    (<span class="sql-string">'2024-01-16'</span>, <span class="sql-string">'USD_SWAPTION'</span>, <span class="sql-string">'5Y'</span>, <span class="sql-string">'ATM'</span>, <span class="sql-number">0.3220</span>);
+
+<span class="sql-keyword">CREATE TABLE</span> market_data.credit_spreads (
+    spread_date <span class="sql-keyword">DATE</span>,
+    cpty_id <span class="sql-keyword">VARCHAR</span>,
+    tenor <span class="sql-keyword">VARCHAR</span>,
+    spread_bps <span class="sql-keyword">DECIMAL</span>(<span class="sql-number">8</span>,<span class="sql-number">2</span>)
+);
+<span class="sql-keyword">ALTER TABLE</span> market_data.credit_spreads <span class="sql-keyword">SET PARTITIONED BY</span> (spread_date);
+
+<span class="sql-keyword">INSERT INTO</span> market_data.credit_spreads <span class="sql-keyword">VALUES</span>
+    (<span class="sql-string">'2024-01-15'</span>, <span class="sql-string">'CPTY001'</span>, <span class="sql-string">'5Y'</span>, <span class="sql-number">45.5</span>),
+    (<span class="sql-string">'2024-01-15'</span>, <span class="sql-string">'CPTY002'</span>, <span class="sql-string">'5Y'</span>, <span class="sql-number">38.2</span>),
+    (<span class="sql-string">'2024-01-15'</span>, <span class="sql-string">'CPTY003'</span>, <span class="sql-string">'5Y'</span>, <span class="sql-number">125.0</span>),
+    (<span class="sql-string">'2024-01-15'</span>, <span class="sql-string">'CPTY004'</span>, <span class="sql-string">'5Y'</span>, <span class="sql-number">280.5</span>),
+    (<span class="sql-string">'2024-01-16'</span>, <span class="sql-string">'CPTY001'</span>, <span class="sql-string">'5Y'</span>, <span class="sql-number">46.0</span>),
+    (<span class="sql-string">'2024-01-16'</span>, <span class="sql-string">'CPTY003'</span>, <span class="sql-string">'5Y'</span>, <span class="sql-number">128.5</span>);
+
+<span class="sql-comment">-- ============================================================================</span>
+<span class="sql-comment">-- SCHEMA: trades (partitioned by trade_date, asset_class)</span>
+<span class="sql-comment">-- ============================================================================</span>
+<span class="sql-keyword">CREATE SCHEMA</span> trades;
+
+<span class="sql-keyword">CREATE TABLE</span> trades.positions (
+    trade_id <span class="sql-keyword">VARCHAR</span>,
+    trade_date <span class="sql-keyword">DATE</span>,
+    cpty_id <span class="sql-keyword">VARCHAR</span>,
+    product_type <span class="sql-keyword">VARCHAR</span>,
+    asset_class <span class="sql-keyword">VARCHAR</span>,
+    ccy <span class="sql-keyword">VARCHAR</span>,
+    notional <span class="sql-keyword">DECIMAL</span>(<span class="sql-number">18</span>,<span class="sql-number">2</span>),
+    maturity <span class="sql-keyword">DATE</span>,
+    pay_rec <span class="sql-keyword">VARCHAR</span>,
+    strike <span class="sql-keyword">DECIMAL</span>(<span class="sql-number">10</span>,<span class="sql-number">6</span>)
+);
+<span class="sql-keyword">ALTER TABLE</span> trades.positions <span class="sql-keyword">SET PARTITIONED BY</span> (trade_date, asset_class);
+
+<span class="sql-keyword">INSERT INTO</span> trades.positions <span class="sql-keyword">VALUES</span>
+    (<span class="sql-string">'TRD001'</span>, <span class="sql-string">'2024-01-10'</span>, <span class="sql-string">'CPTY001'</span>, <span class="sql-string">'IR_SWAP'</span>, <span class="sql-string">'Rates'</span>, <span class="sql-string">'USD'</span>, <span class="sql-number">50000000</span>, <span class="sql-string">'2029-01-10'</span>, <span class="sql-string">'PAY'</span>, <span class="sql-number">0.045</span>),
+    (<span class="sql-string">'TRD002'</span>, <span class="sql-string">'2024-01-10'</span>, <span class="sql-string">'CPTY001'</span>, <span class="sql-string">'SWAPTION'</span>, <span class="sql-string">'Rates'</span>, <span class="sql-string">'USD'</span>, <span class="sql-number">100000000</span>, <span class="sql-string">'2025-01-10'</span>, <span class="sql-string">'REC'</span>, <span class="sql-number">0.048</span>),
+    (<span class="sql-string">'TRD003'</span>, <span class="sql-string">'2024-01-12'</span>, <span class="sql-string">'CPTY002'</span>, <span class="sql-string">'CAP'</span>, <span class="sql-string">'Rates'</span>, <span class="sql-string">'EUR'</span>, <span class="sql-number">75000000</span>, <span class="sql-string">'2027-01-12'</span>, <span class="sql-string">'REC'</span>, <span class="sql-number">0.035</span>),
+    (<span class="sql-string">'TRD004'</span>, <span class="sql-string">'2024-01-12'</span>, <span class="sql-string">'CPTY003'</span>, <span class="sql-string">'IR_SWAP'</span>, <span class="sql-string">'Rates'</span>, <span class="sql-string">'USD'</span>, <span class="sql-number">25000000</span>, <span class="sql-string">'2034-01-12'</span>, <span class="sql-string">'PAY'</span>, <span class="sql-number">0.052</span>),
+    (<span class="sql-string">'TRD005'</span>, <span class="sql-string">'2024-01-15'</span>, <span class="sql-string">'CPTY002'</span>, <span class="sql-string">'FX_OPTION'</span>, <span class="sql-string">'FX'</span>, <span class="sql-string">'EUR'</span>, <span class="sql-number">30000000</span>, <span class="sql-string">'2024-07-15'</span>, <span class="sql-string">'REC'</span>, <span class="sql-number">1.0850</span>),
+    (<span class="sql-string">'TRD006'</span>, <span class="sql-string">'2024-01-15'</span>, <span class="sql-string">'CPTY004'</span>, <span class="sql-string">'FLOOR'</span>, <span class="sql-string">'Rates'</span>, <span class="sql-string">'USD'</span>, <span class="sql-number">80000000</span>, <span class="sql-string">'2026-01-15'</span>, <span class="sql-string">'REC'</span>, <span class="sql-number">0.030</span>);
+
+<span class="sql-comment">-- ============================================================================</span>
+<span class="sql-comment">-- SCHEMA: models (partitioned by calib_date)</span>
+<span class="sql-comment">-- ============================================================================</span>
+<span class="sql-keyword">CREATE SCHEMA</span> models;
+
+<span class="sql-keyword">CREATE TABLE</span> models.sabr_params (
+    calib_date <span class="sql-keyword">DATE</span>,
+    underlying <span class="sql-keyword">VARCHAR</span>,
+    expiry <span class="sql-keyword">VARCHAR</span>,
+    alpha <span class="sql-keyword">DECIMAL</span>(<span class="sql-number">10</span>,<span class="sql-number">6</span>),
+    beta <span class="sql-keyword">DECIMAL</span>(<span class="sql-number">10</span>,<span class="sql-number">6</span>),
+    rho <span class="sql-keyword">DECIMAL</span>(<span class="sql-number">10</span>,<span class="sql-number">6</span>),
+    nu <span class="sql-keyword">DECIMAL</span>(<span class="sql-number">10</span>,<span class="sql-number">6</span>)  <span class="sql-comment">-- vol-of-vol</span>
+);
+<span class="sql-keyword">ALTER TABLE</span> models.sabr_params <span class="sql-keyword">SET PARTITIONED BY</span> (calib_date);
+
+<span class="sql-keyword">INSERT INTO</span> models.sabr_params <span class="sql-keyword">VALUES</span>
+    (<span class="sql-string">'2024-01-15'</span>, <span class="sql-string">'USD_SWAPTION'</span>, <span class="sql-string">'1Y'</span>, <span class="sql-number">0.0320</span>, <span class="sql-number">0.5</span>, <span class="sql-number">-0.25</span>, <span class="sql-number">0.40</span>),
+    (<span class="sql-string">'2024-01-15'</span>, <span class="sql-string">'USD_SWAPTION'</span>, <span class="sql-string">'5Y'</span>, <span class="sql-number">0.0280</span>, <span class="sql-number">0.5</span>, <span class="sql-number">-0.30</span>, <span class="sql-number">0.35</span>),
+    (<span class="sql-string">'2024-01-15'</span>, <span class="sql-string">'EUR_SWAPTION'</span>, <span class="sql-string">'1Y'</span>, <span class="sql-number">0.0350</span>, <span class="sql-number">0.5</span>, <span class="sql-number">-0.20</span>, <span class="sql-number">0.45</span>),
+    (<span class="sql-string">'2024-01-16'</span>, <span class="sql-string">'USD_SWAPTION'</span>, <span class="sql-string">'1Y'</span>, <span class="sql-number">0.0325</span>, <span class="sql-number">0.5</span>, <span class="sql-number">-0.26</span>, <span class="sql-number">0.41</span>);
+
+<span class="sql-keyword">CREATE TABLE</span> models.hw1f_params (
+    calib_date <span class="sql-keyword">DATE</span>,
+    ccy <span class="sql-keyword">VARCHAR</span>,
+    mean_reversion <span class="sql-keyword">DECIMAL</span>(<span class="sql-number">10</span>,<span class="sql-number">6</span>),
+    volatility <span class="sql-keyword">DECIMAL</span>(<span class="sql-number">10</span>,<span class="sql-number">6</span>)
+);
+<span class="sql-keyword">ALTER TABLE</span> models.hw1f_params <span class="sql-keyword">SET PARTITIONED BY</span> (calib_date);
+
+<span class="sql-keyword">INSERT INTO</span> models.hw1f_params <span class="sql-keyword">VALUES</span>
+    (<span class="sql-string">'2024-01-15'</span>, <span class="sql-string">'USD'</span>, <span class="sql-number">0.03</span>, <span class="sql-number">0.0085</span>),
+    (<span class="sql-string">'2024-01-15'</span>, <span class="sql-string">'EUR'</span>, <span class="sql-number">0.02</span>, <span class="sql-number">0.0075</span>),
+    (<span class="sql-string">'2024-01-16'</span>, <span class="sql-string">'USD'</span>, <span class="sql-number">0.03</span>, <span class="sql-number">0.0088</span>);
+
+<span class="sql-comment">-- ============================================================================</span>
+<span class="sql-comment">-- SCHEMA: results (partitioned by valuation_date, measure)</span>
+<span class="sql-comment">-- ============================================================================</span>
+<span class="sql-keyword">CREATE SCHEMA</span> results;
+
+<span class="sql-keyword">CREATE TABLE</span> results.xva_daily (
+    valuation_date <span class="sql-keyword">DATE</span>,
+    trade_id <span class="sql-keyword">VARCHAR</span>,
+    cpty_id <span class="sql-keyword">VARCHAR</span>,
+    measure <span class="sql-keyword">VARCHAR</span>,  <span class="sql-comment">-- MTM, CVA, DVA, FVA</span>
+    value <span class="sql-keyword">DECIMAL</span>(<span class="sql-number">18</span>,<span class="sql-number">2</span>),
+    currency <span class="sql-keyword">VARCHAR</span>
+);
+<span class="sql-keyword">ALTER TABLE</span> results.xva_daily <span class="sql-keyword">SET PARTITIONED BY</span> (valuation_date, measure);
+
+<span class="sql-keyword">INSERT INTO</span> results.xva_daily <span class="sql-keyword">VALUES</span>
+    (<span class="sql-string">'2024-01-15'</span>, <span class="sql-string">'TRD001'</span>, <span class="sql-string">'CPTY001'</span>, <span class="sql-string">'MTM'</span>, <span class="sql-number">1250000.00</span>, <span class="sql-string">'USD'</span>),
+    (<span class="sql-string">'2024-01-15'</span>, <span class="sql-string">'TRD001'</span>, <span class="sql-string">'CPTY001'</span>, <span class="sql-string">'CVA'</span>, <span class="sql-number">-45000.00</span>, <span class="sql-string">'USD'</span>),
+    (<span class="sql-string">'2024-01-15'</span>, <span class="sql-string">'TRD001'</span>, <span class="sql-string">'CPTY001'</span>, <span class="sql-string">'DVA'</span>, <span class="sql-number">12000.00</span>, <span class="sql-string">'USD'</span>),
+    (<span class="sql-string">'2024-01-15'</span>, <span class="sql-string">'TRD001'</span>, <span class="sql-string">'CPTY001'</span>, <span class="sql-string">'FVA'</span>, <span class="sql-number">-8500.00</span>, <span class="sql-string">'USD'</span>),
+    (<span class="sql-string">'2024-01-15'</span>, <span class="sql-string">'TRD002'</span>, <span class="sql-string">'CPTY001'</span>, <span class="sql-string">'MTM'</span>, <span class="sql-number">3200000.00</span>, <span class="sql-string">'USD'</span>),
+    (<span class="sql-string">'2024-01-15'</span>, <span class="sql-string">'TRD002'</span>, <span class="sql-string">'CPTY001'</span>, <span class="sql-string">'CVA'</span>, <span class="sql-number">-125000.00</span>, <span class="sql-string">'USD'</span>),
+    (<span class="sql-string">'2024-01-15'</span>, <span class="sql-string">'TRD003'</span>, <span class="sql-string">'CPTY002'</span>, <span class="sql-string">'MTM'</span>, <span class="sql-number">890000.00</span>, <span class="sql-string">'EUR'</span>),
+    (<span class="sql-string">'2024-01-15'</span>, <span class="sql-string">'TRD003'</span>, <span class="sql-string">'CPTY002'</span>, <span class="sql-string">'CVA'</span>, <span class="sql-number">-32000.00</span>, <span class="sql-string">'EUR'</span>),
+    (<span class="sql-string">'2024-01-16'</span>, <span class="sql-string">'TRD001'</span>, <span class="sql-string">'CPTY001'</span>, <span class="sql-string">'MTM'</span>, <span class="sql-number">1320000.00</span>, <span class="sql-string">'USD'</span>),
+    (<span class="sql-string">'2024-01-16'</span>, <span class="sql-string">'TRD001'</span>, <span class="sql-string">'CPTY001'</span>, <span class="sql-string">'CVA'</span>, <span class="sql-number">-47500.00</span>, <span class="sql-string">'USD'</span>);
+
+<span class="sql-keyword">CREATE TABLE</span> results.greeks (
+    valuation_date <span class="sql-keyword">DATE</span>,
+    trade_id <span class="sql-keyword">VARCHAR</span>,
+    greek <span class="sql-keyword">VARCHAR</span>,
+    value <span class="sql-keyword">DECIMAL</span>(<span class="sql-number">18</span>,<span class="sql-number">2</span>),
+    currency <span class="sql-keyword">VARCHAR</span>
+);
+<span class="sql-keyword">ALTER TABLE</span> results.greeks <span class="sql-keyword">SET PARTITIONED BY</span> (valuation_date);
+
+<span class="sql-keyword">INSERT INTO</span> results.greeks <span class="sql-keyword">VALUES</span>
+    (<span class="sql-string">'2024-01-15'</span>, <span class="sql-string">'TRD001'</span>, <span class="sql-string">'DV01'</span>, <span class="sql-number">48500.00</span>, <span class="sql-string">'USD'</span>),
+    (<span class="sql-string">'2024-01-15'</span>, <span class="sql-string">'TRD002'</span>, <span class="sql-string">'VEGA'</span>, <span class="sql-number">320000.00</span>, <span class="sql-string">'USD'</span>),
+    (<span class="sql-string">'2024-01-15'</span>, <span class="sql-string">'TRD005'</span>, <span class="sql-string">'DELTA'</span>, <span class="sql-number">15500000.00</span>, <span class="sql-string">'EUR'</span>);
+
+<span class="sql-comment">-- Verify setup</span>
+<span class="sql-keyword">SELECT</span> <span class="sql-string">'counterparties'</span> <span class="sql-keyword">as</span> tbl, <span class="sql-keyword">COUNT</span>(*) <span class="sql-keyword">FROM</span> reference.counterparties
+<span class="sql-keyword">UNION ALL SELECT</span> <span class="sql-string">'ir_curves'</span>, <span class="sql-keyword">COUNT</span>(*) <span class="sql-keyword">FROM</span> market_data.ir_curves
+<span class="sql-keyword">UNION ALL SELECT</span> <span class="sql-string">'positions'</span>, <span class="sql-keyword">COUNT</span>(*) <span class="sql-keyword">FROM</span> trades.positions
+<span class="sql-keyword">UNION ALL SELECT</span> <span class="sql-string">'xva_daily'</span>, <span class="sql-keyword">COUNT</span>(*) <span class="sql-keyword">FROM</span> results.xva_daily;</code></pre>
+</div>
+
+<!-- PHASE 2 -->
+<div class="phase" id="phase2">
+    <div class="phase-header">
+        <div class="phase-number">2</div>
+        <h3 class="phase-title">Create Team Branches</h3>
+    </div>
+
+    <div class="goal">
+        <strong>Goal:</strong> Create isolated branches for each team. Instant operation - only metadata copied.
+    </div>
+
+    <h4>Terminal 1 (Production)</h4>
+    <pre><code><span class="sql-comment">-- Create branches for each team</span>
+<span class="sql-keyword">CALL</span> ducklake_create_branch(<span class="sql-string">'db'</span>, <span class="sql-string">'model_test'</span>);
+<span class="sql-keyword">CALL</span> ducklake_create_branch(<span class="sql-string">'db'</span>, <span class="sql-string">'what_if_trades'</span>);
+<span class="sql-keyword">CALL</span> ducklake_create_branch(<span class="sql-string">'db'</span>, <span class="sql-string">'stress_test'</span>);
+
+<span class="sql-comment">-- Verify branches</span>
+<span class="sql-keyword">SELECT</span> * <span class="sql-keyword">FROM</span> ducklake_branches(<span class="sql-string">'db'</span>);</code></pre>
+
+    <div class="branch-tree">
+<span class="branch-main">main (production)</span>
+├── <span class="branch-model">model_test</span> (quant team)
+├── <span class="branch-whatif">what_if_trades</span> (sales team)
+└── <span class="branch-stress">stress_test</span> (risk team)
+    </div>
+</div>
+
+<!-- PHASE 3 -->
+<div class="phase" id="phase3">
+    <div class="phase-header">
+        <div class="phase-number">3</div>
+        <h3 class="phase-title">Model Testing Branch</h3>
+    </div>
+
+    <div class="goal">
+        <strong>Goal:</strong> Quant team tests new SABR calibration with higher vol-of-vol (nu parameter).
+    </div>
+
+    <div class="use-case">
+        <strong>Business Context:</strong> The quant team believes the current SABR calibration underestimates vol-of-vol. They want to test new params and see the XVA impact without affecting production.
+    </div>
+
+    <h4>Terminal 2 (model_test)</h4>
+    <pre><code><span class="sql-comment">-- Connect and switch to model_test branch</span>
+<span class="sql-keyword">CALL</span> ducklake_use_branch(<span class="sql-string">'db'</span>, <span class="sql-string">'model_test'</span>);
+
+<span class="sql-comment">-- Delete old calibration for today</span>
+<span class="sql-keyword">DELETE FROM</span> models.sabr_params <span class="sql-keyword">WHERE</span> calib_date = <span class="sql-string">'2024-01-16'</span>;
+
+<span class="sql-comment">-- Insert new test calibration with higher vol-of-vol</span>
+<span class="sql-keyword">INSERT INTO</span> models.sabr_params <span class="sql-keyword">VALUES</span>
+    (<span class="sql-string">'2024-01-16'</span>, <span class="sql-string">'USD_SWAPTION'</span>, <span class="sql-string">'1Y'</span>, <span class="sql-number">0.0330</span>, <span class="sql-number">0.5</span>, <span class="sql-number">-0.28</span>, <span class="sql-number">0.50</span>),  <span class="sql-comment">-- nu: 0.41 -> 0.50</span>
+    (<span class="sql-string">'2024-01-16'</span>, <span class="sql-string">'USD_SWAPTION'</span>, <span class="sql-string">'5Y'</span>, <span class="sql-number">0.0290</span>, <span class="sql-number">0.5</span>, <span class="sql-number">-0.32</span>, <span class="sql-number">0.45</span>),
+    (<span class="sql-string">'2024-01-16'</span>, <span class="sql-string">'EUR_SWAPTION'</span>, <span class="sql-string">'1Y'</span>, <span class="sql-number">0.0360</span>, <span class="sql-number">0.5</span>, <span class="sql-number">-0.22</span>, <span class="sql-number">0.52</span>);
+
+<span class="sql-comment">-- Recalculate XVA with new model (simulated results)</span>
+<span class="sql-keyword">DELETE FROM</span> results.xva_daily <span class="sql-keyword">WHERE</span> valuation_date = <span class="sql-string">'2024-01-16'</span>;
+
+<span class="sql-keyword">INSERT INTO</span> results.xva_daily <span class="sql-keyword">VALUES</span>
+    (<span class="sql-string">'2024-01-16'</span>, <span class="sql-string">'TRD001'</span>, <span class="sql-string">'CPTY001'</span>, <span class="sql-string">'MTM'</span>, <span class="sql-number">1350000.00</span>, <span class="sql-string">'USD'</span>),   <span class="sql-comment">-- higher due to vol</span>
+    (<span class="sql-string">'2024-01-16'</span>, <span class="sql-string">'TRD001'</span>, <span class="sql-string">'CPTY001'</span>, <span class="sql-string">'CVA'</span>, <span class="sql-number">-52000.00</span>, <span class="sql-string">'USD'</span>),    <span class="sql-comment">-- higher CVA</span>
+    (<span class="sql-string">'2024-01-16'</span>, <span class="sql-string">'TRD002'</span>, <span class="sql-string">'CPTY001'</span>, <span class="sql-string">'MTM'</span>, <span class="sql-number">3450000.00</span>, <span class="sql-string">'USD'</span>),   <span class="sql-comment">-- swaption more sensitive</span>
+    (<span class="sql-string">'2024-01-16'</span>, <span class="sql-string">'TRD002'</span>, <span class="sql-string">'CPTY001'</span>, <span class="sql-string">'CVA'</span>, <span class="sql-number">-145000.00</span>, <span class="sql-string">'USD'</span>);
+
+<span class="sql-comment">-- Compare with production</span>
+<span class="sql-keyword">SELECT</span> <span class="sql-string">'model_test'</span> <span class="sql-keyword">as</span> branch, measure, <span class="sql-keyword">SUM</span>(value) <span class="sql-keyword">as</span> total
+<span class="sql-keyword">FROM</span> results.xva_daily <span class="sql-keyword">WHERE</span> valuation_date = <span class="sql-string">'2024-01-16'</span> <span class="sql-keyword">GROUP BY</span> measure
+<span class="sql-keyword">UNION ALL</span>
+<span class="sql-keyword">SELECT</span> <span class="sql-string">'main'</span>, measure, <span class="sql-keyword">SUM</span>(value)
+<span class="sql-keyword">FROM</span> results.xva_daily <span class="sql-keyword">AT</span> (<span class="sql-keyword">BRANCH</span> => <span class="sql-string">'main'</span>) <span class="sql-keyword">WHERE</span> valuation_date = <span class="sql-string">'2024-01-16'</span>
+<span class="sql-keyword">GROUP BY</span> measure
+<span class="sql-keyword">ORDER BY</span> <span class="sql-number">2</span>, <span class="sql-number">1</span>;</code></pre>
+
+    <table>
+        <thead>
+            <tr><th>Branch</th><th>Measure</th><th>Total</th><th>Impact</th></tr>
+        </thead>
+        <tbody>
+            <tr><td>main</td><td>CVA</td><td>-47,500</td><td>-</td></tr>
+            <tr><td>model_test</td><td>CVA</td><td>-197,000</td><td style="color: #a07070;">+315% higher CVA</td></tr>
+            <tr><td>main</td><td>MTM</td><td>1,320,000</td><td>-</td></tr>
+            <tr><td>model_test</td><td>MTM</td><td>4,800,000</td><td style="color: #6b8e6b;">Swaption value up</td></tr>
+        </tbody>
+    </table>
+
+    <div class="key-point">
+        <strong>Insight:</strong> Higher vol-of-vol increases swaption MTM but also increases CVA charge. Production remains unchanged for EOD reporting.
+    </div>
+</div>
+
+<!-- PHASE 4 -->
+<div class="phase" id="phase4">
+    <div class="phase-header">
+        <div class="phase-number">4</div>
+        <h3 class="phase-title">What-If Trades Branch</h3>
+    </div>
+
+    <div class="goal">
+        <strong>Goal:</strong> Sales team analyzes CVA impact of potential 500M EUR swaption with a new pension fund client.
+    </div>
+
+    <div class="use-case">
+        <strong>Business Context:</strong> Sales is pitching a large swaption to a Nordic pension fund. They need to know the incremental CVA before pricing the deal.
+    </div>
+
+    <h4>Terminal 3 (what_if_trades)</h4>
+    <pre><code><span class="sql-comment">-- Switch to what_if branch</span>
+<span class="sql-keyword">CALL</span> ducklake_use_branch(<span class="sql-string">'db'</span>, <span class="sql-string">'what_if_trades'</span>);
+
+<span class="sql-comment">-- Add new counterparty</span>
+<span class="sql-keyword">INSERT INTO</span> reference.counterparties <span class="sql-keyword">VALUES</span>
+    (<span class="sql-string">'CPTY006'</span>, <span class="sql-string">'Pension Fund Nordic'</span>, <span class="sql-string">'AA'</span>, <span class="sql-string">'Pension'</span>, <span class="sql-keyword">true</span>);
+
+<span class="sql-comment">-- Add credit spreads for new counterparty</span>
+<span class="sql-keyword">INSERT INTO</span> market_data.credit_spreads <span class="sql-keyword">VALUES</span>
+    (<span class="sql-string">'2024-01-16'</span>, <span class="sql-string">'CPTY006'</span>, <span class="sql-string">'5Y'</span>, <span class="sql-number">28.0</span>);
+
+<span class="sql-comment">-- Add hypothetical trades</span>
+<span class="sql-keyword">INSERT INTO</span> trades.positions <span class="sql-keyword">VALUES</span>
+    (<span class="sql-string">'HYP001'</span>, <span class="sql-string">'2024-01-16'</span>, <span class="sql-string">'CPTY006'</span>, <span class="sql-string">'SWAPTION'</span>, <span class="sql-string">'Rates'</span>, <span class="sql-string">'EUR'</span>,
+     <span class="sql-number">500000000</span>, <span class="sql-string">'2029-01-16'</span>, <span class="sql-string">'REC'</span>, <span class="sql-number">0.028</span>),
+    (<span class="sql-string">'HYP002'</span>, <span class="sql-string">'2024-01-16'</span>, <span class="sql-string">'CPTY006'</span>, <span class="sql-string">'IR_SWAP'</span>, <span class="sql-string">'Rates'</span>, <span class="sql-string">'EUR'</span>,
+     <span class="sql-number">200000000</span>, <span class="sql-string">'2034-01-16'</span>, <span class="sql-string">'PAY'</span>, <span class="sql-number">0.032</span>);
+
+<span class="sql-comment">-- Simulate XVA for hypothetical trades</span>
+<span class="sql-keyword">INSERT INTO</span> results.xva_daily <span class="sql-keyword">VALUES</span>
+    (<span class="sql-string">'2024-01-16'</span>, <span class="sql-string">'HYP001'</span>, <span class="sql-string">'CPTY006'</span>, <span class="sql-string">'MTM'</span>, <span class="sql-number">0</span>, <span class="sql-string">'EUR'</span>),           <span class="sql-comment">-- ATM swaption</span>
+    (<span class="sql-string">'2024-01-16'</span>, <span class="sql-string">'HYP001'</span>, <span class="sql-string">'CPTY006'</span>, <span class="sql-string">'CVA'</span>, <span class="sql-number">-850000.00</span>, <span class="sql-string">'EUR'</span>),  <span class="sql-comment">-- large notional = big CVA</span>
+    (<span class="sql-string">'2024-01-16'</span>, <span class="sql-string">'HYP001'</span>, <span class="sql-string">'CPTY006'</span>, <span class="sql-string">'FVA'</span>, <span class="sql-number">-125000.00</span>, <span class="sql-string">'EUR'</span>),
+    (<span class="sql-string">'2024-01-16'</span>, <span class="sql-string">'HYP002'</span>, <span class="sql-string">'CPTY006'</span>, <span class="sql-string">'MTM'</span>, <span class="sql-number">2500000.00</span>, <span class="sql-string">'EUR'</span>),
+    (<span class="sql-string">'2024-01-16'</span>, <span class="sql-string">'HYP002'</span>, <span class="sql-string">'CPTY006'</span>, <span class="sql-string">'CVA'</span>, <span class="sql-number">-320000.00</span>, <span class="sql-string">'EUR'</span>);
+
+<span class="sql-comment">-- Portfolio impact by counterparty</span>
+<span class="sql-keyword">SELECT</span> cpty_id,
+       <span class="sql-keyword">SUM</span>(<span class="sql-keyword">CASE WHEN</span> measure=<span class="sql-string">'MTM'</span> <span class="sql-keyword">THEN</span> value <span class="sql-keyword">END</span>) <span class="sql-keyword">as</span> total_mtm,
+       <span class="sql-keyword">SUM</span>(<span class="sql-keyword">CASE WHEN</span> measure=<span class="sql-string">'CVA'</span> <span class="sql-keyword">THEN</span> value <span class="sql-keyword">END</span>) <span class="sql-keyword">as</span> total_cva
+<span class="sql-keyword">FROM</span> results.xva_daily
+<span class="sql-keyword">WHERE</span> valuation_date = <span class="sql-string">'2024-01-16'</span>
+<span class="sql-keyword">GROUP BY</span> cpty_id
+<span class="sql-keyword">ORDER BY</span> total_cva;
+
+<span class="sql-comment">-- Trade count comparison</span>
+<span class="sql-keyword">SELECT</span> <span class="sql-string">'main'</span> <span class="sql-keyword">as</span> branch, <span class="sql-keyword">COUNT</span>(*) <span class="sql-keyword">as</span> trades <span class="sql-keyword">FROM</span> trades.positions <span class="sql-keyword">AT</span> (<span class="sql-keyword">BRANCH</span> => <span class="sql-string">'main'</span>)
+<span class="sql-keyword">UNION ALL</span>
+<span class="sql-keyword">SELECT</span> <span class="sql-string">'what_if'</span>, <span class="sql-keyword">COUNT</span>(*) <span class="sql-keyword">FROM</span> trades.positions;</code></pre>
+
+    <table>
+        <thead>
+            <tr><th>Counterparty</th><th>Total MTM</th><th>Total CVA</th><th>Notes</th></tr>
+        </thead>
+        <tbody>
+            <tr><td>CPTY006 (Pension Fund)</td><td>2,500,000 EUR</td><td>-1,170,000 EUR</td><td style="color: #a07070;">New: Large CVA for big notional</td></tr>
+            <tr><td>CPTY001</td><td>1,320,000 USD</td><td>-47,500 USD</td><td>Existing (from main)</td></tr>
+        </tbody>
+    </table>
+
+    <div class="warning">
+        <strong>Sales Decision:</strong> Incremental CVA of 1.17M EUR on 700M notional (500M swaption + 200M swap) = ~17bp upfront charge. Need to price this into the deal.
+    </div>
+</div>
+
+<!-- PHASE 5 -->
+<div class="phase" id="phase5">
+    <div class="phase-header">
+        <div class="phase-number">5</div>
+        <h3 class="phase-title">Stress Testing Branch</h3>
+    </div>
+
+    <div class="goal">
+        <strong>Goal:</strong> Risk team runs stress scenario with rates +100bp and credit spreads widening 50%.
+    </div>
+
+    <div class="use-case">
+        <strong>Business Context:</strong> Risk management needs to assess portfolio vulnerability to a sudden rate shock combined with credit deterioration.
+    </div>
+
+    <h4>Terminal 4 (stress_test)</h4>
+    <pre><code><span class="sql-comment">-- Switch to stress_test branch</span>
+<span class="sql-keyword">CALL</span> ducklake_use_branch(<span class="sql-string">'db'</span>, <span class="sql-string">'stress_test'</span>);
+
+<span class="sql-comment">-- Apply rate shock: +100bp across the curve</span>
+<span class="sql-keyword">DELETE FROM</span> market_data.ir_curves <span class="sql-keyword">WHERE</span> curve_date = <span class="sql-string">'2024-01-16'</span>;
+
+<span class="sql-keyword">INSERT INTO</span> market_data.ir_curves <span class="sql-keyword">VALUES</span>
+    (<span class="sql-string">'2024-01-16'</span>, <span class="sql-string">'USD_OIS'</span>, <span class="sql-string">'USD'</span>, <span class="sql-string">'1Y'</span>, <span class="sql-number">0.0628</span>),   <span class="sql-comment">-- +100bp</span>
+    (<span class="sql-string">'2024-01-16'</span>, <span class="sql-string">'USD_OIS'</span>, <span class="sql-string">'USD'</span>, <span class="sql-string">'5Y'</span>, <span class="sql-number">0.0588</span>),
+    (<span class="sql-string">'2024-01-16'</span>, <span class="sql-string">'USD_OIS'</span>, <span class="sql-string">'USD'</span>, <span class="sql-string">'10Y'</span>, <span class="sql-number">0.0565</span>),
+    (<span class="sql-string">'2024-01-16'</span>, <span class="sql-string">'EUR_ESTR'</span>, <span class="sql-string">'EUR'</span>, <span class="sql-string">'1Y'</span>, <span class="sql-number">0.0492</span>);
+
+<span class="sql-comment">-- Widen credit spreads by 50%</span>
+<span class="sql-keyword">DELETE FROM</span> market_data.credit_spreads <span class="sql-keyword">WHERE</span> spread_date = <span class="sql-string">'2024-01-16'</span>;
+
+<span class="sql-keyword">INSERT INTO</span> market_data.credit_spreads <span class="sql-keyword">VALUES</span>
+    (<span class="sql-string">'2024-01-16'</span>, <span class="sql-string">'CPTY001'</span>, <span class="sql-string">'5Y'</span>, <span class="sql-number">69.0</span>),    <span class="sql-comment">-- 46 * 1.5</span>
+    (<span class="sql-string">'2024-01-16'</span>, <span class="sql-string">'CPTY003'</span>, <span class="sql-string">'5Y'</span>, <span class="sql-number">192.75</span>),  <span class="sql-comment">-- 128.5 * 1.5</span>
+    (<span class="sql-string">'2024-01-16'</span>, <span class="sql-string">'CPTY004'</span>, <span class="sql-string">'5Y'</span>, <span class="sql-number">420.75</span>);  <span class="sql-comment">-- 280.5 * 1.5 (junk!)</span>
+
+<span class="sql-comment">-- Recalculate XVA under stress</span>
+<span class="sql-keyword">DELETE FROM</span> results.xva_daily <span class="sql-keyword">WHERE</span> valuation_date = <span class="sql-string">'2024-01-16'</span>;
+
+<span class="sql-keyword">INSERT INTO</span> results.xva_daily <span class="sql-keyword">VALUES</span>
+    (<span class="sql-string">'2024-01-16'</span>, <span class="sql-string">'TRD001'</span>, <span class="sql-string">'CPTY001'</span>, <span class="sql-string">'MTM'</span>, <span class="sql-number">-2500000.00</span>, <span class="sql-string">'USD'</span>),  <span class="sql-comment">-- rates up = pay fixed loses</span>
+    (<span class="sql-string">'2024-01-16'</span>, <span class="sql-string">'TRD001'</span>, <span class="sql-string">'CPTY001'</span>, <span class="sql-string">'CVA'</span>, <span class="sql-number">-28000.00</span>, <span class="sql-string">'USD'</span>),   <span class="sql-comment">-- lower exposure = less CVA</span>
+    (<span class="sql-string">'2024-01-16'</span>, <span class="sql-string">'TRD002'</span>, <span class="sql-string">'CPTY001'</span>, <span class="sql-string">'MTM'</span>, <span class="sql-number">1800000.00</span>, <span class="sql-string">'USD'</span>),   <span class="sql-comment">-- swaption OTM</span>
+    (<span class="sql-string">'2024-01-16'</span>, <span class="sql-string">'TRD002'</span>, <span class="sql-string">'CPTY001'</span>, <span class="sql-string">'CVA'</span>, <span class="sql-number">-180000.00</span>, <span class="sql-string">'USD'</span>),  <span class="sql-comment">-- wider spread</span>
+    (<span class="sql-string">'2024-01-16'</span>, <span class="sql-string">'TRD004'</span>, <span class="sql-string">'CPTY003'</span>, <span class="sql-string">'MTM'</span>, <span class="sql-number">-4200000.00</span>, <span class="sql-string">'USD'</span>), <span class="sql-comment">-- big loser</span>
+    (<span class="sql-string">'2024-01-16'</span>, <span class="sql-string">'TRD004'</span>, <span class="sql-string">'CPTY003'</span>, <span class="sql-string">'CVA'</span>, <span class="sql-number">-85000.00</span>, <span class="sql-string">'USD'</span>),
+    (<span class="sql-string">'2024-01-16'</span>, <span class="sql-string">'TRD006'</span>, <span class="sql-string">'CPTY004'</span>, <span class="sql-string">'MTM'</span>, <span class="sql-number">950000.00</span>, <span class="sql-string">'USD'</span>),    <span class="sql-comment">-- floor ITM</span>
+    (<span class="sql-string">'2024-01-16'</span>, <span class="sql-string">'TRD006'</span>, <span class="sql-string">'CPTY004'</span>, <span class="sql-string">'CVA'</span>, <span class="sql-number">-125000.00</span>, <span class="sql-string">'USD'</span>);  <span class="sql-comment">-- junk spread</span>
+
+<span class="sql-comment">-- Stress vs Base comparison</span>
+<span class="sql-keyword">SELECT</span> <span class="sql-string">'STRESS'</span> <span class="sql-keyword">as</span> scenario,
+       <span class="sql-keyword">SUM</span>(<span class="sql-keyword">CASE WHEN</span> measure=<span class="sql-string">'MTM'</span> <span class="sql-keyword">THEN</span> value <span class="sql-keyword">END</span>) <span class="sql-keyword">as</span> portfolio_mtm,
+       <span class="sql-keyword">SUM</span>(<span class="sql-keyword">CASE WHEN</span> measure=<span class="sql-string">'CVA'</span> <span class="sql-keyword">THEN</span> value <span class="sql-keyword">END</span>) <span class="sql-keyword">as</span> total_cva
+<span class="sql-keyword">FROM</span> results.xva_daily <span class="sql-keyword">WHERE</span> valuation_date = <span class="sql-string">'2024-01-16'</span>
+<span class="sql-keyword">UNION ALL</span>
+<span class="sql-keyword">SELECT</span> <span class="sql-string">'BASE'</span>,
+       <span class="sql-keyword">SUM</span>(<span class="sql-keyword">CASE WHEN</span> measure=<span class="sql-string">'MTM'</span> <span class="sql-keyword">THEN</span> value <span class="sql-keyword">END</span>),
+       <span class="sql-keyword">SUM</span>(<span class="sql-keyword">CASE WHEN</span> measure=<span class="sql-string">'CVA'</span> <span class="sql-keyword">THEN</span> value <span class="sql-keyword">END</span>)
+<span class="sql-keyword">FROM</span> results.xva_daily <span class="sql-keyword">AT</span> (<span class="sql-keyword">BRANCH</span> => <span class="sql-string">'main'</span>) <span class="sql-keyword">WHERE</span> valuation_date = <span class="sql-string">'2024-01-16'</span>;</code></pre>
+
+    <table>
+        <thead>
+            <tr><th>Scenario</th><th>Portfolio MTM</th><th>Total CVA</th><th>Impact</th></tr>
+        </thead>
+        <tbody>
+            <tr><td>BASE</td><td>1,320,000 USD</td><td>-47,500 USD</td><td>-</td></tr>
+            <tr><td>STRESS</td><td>-3,950,000 USD</td><td>-418,000 USD</td><td style="color: #a07070;">-5.3M MTM swing, 8.8x CVA increase</td></tr>
+        </tbody>
+    </table>
+
+    <div class="warning">
+        <strong>Risk Alert:</strong> Under stress, portfolio swings from +1.3M to -4.0M (5.3M loss). CVA increases 8.8x due to wider spreads. TRD004 (10Y swap with Shell Energy) is the biggest loser.
+    </div>
+</div>
+
+<!-- PHASE 6 -->
+<div class="phase" id="phase6">
+    <div class="phase-header">
+        <div class="phase-number">6</div>
+        <h3 class="phase-title">Cross-Branch Comparison Dashboard</h3>
+    </div>
+
+    <div class="goal">
+        <strong>Goal:</strong> Compare all scenarios side-by-side from any terminal.
+    </div>
+
+    <h4>Any Terminal - XVA Dashboard</h4>
+    <pre><code><span class="sql-comment">-- Cross-branch XVA comparison</span>
+<span class="sql-keyword">SELECT</span>
+    <span class="sql-string">'main'</span> <span class="sql-keyword">as</span> scenario,
+    <span class="sql-keyword">SUM</span>(<span class="sql-keyword">CASE WHEN</span> measure=<span class="sql-string">'MTM'</span> <span class="sql-keyword">THEN</span> value <span class="sql-keyword">END</span>) <span class="sql-keyword">as</span> mtm,
+    <span class="sql-keyword">SUM</span>(<span class="sql-keyword">CASE WHEN</span> measure=<span class="sql-string">'CVA'</span> <span class="sql-keyword">THEN</span> value <span class="sql-keyword">END</span>) <span class="sql-keyword">as</span> cva,
+    <span class="sql-keyword">SUM</span>(<span class="sql-keyword">CASE WHEN</span> measure=<span class="sql-string">'DVA'</span> <span class="sql-keyword">THEN</span> value <span class="sql-keyword">END</span>) <span class="sql-keyword">as</span> dva,
+    <span class="sql-keyword">SUM</span>(<span class="sql-keyword">CASE WHEN</span> measure=<span class="sql-string">'FVA'</span> <span class="sql-keyword">THEN</span> value <span class="sql-keyword">END</span>) <span class="sql-keyword">as</span> fva
+<span class="sql-keyword">FROM</span> results.xva_daily <span class="sql-keyword">AT</span> (<span class="sql-keyword">BRANCH</span> => <span class="sql-string">'main'</span>)
+<span class="sql-keyword">WHERE</span> valuation_date = <span class="sql-string">'2024-01-16'</span>
+<span class="sql-keyword">UNION ALL</span>
+<span class="sql-keyword">SELECT</span> <span class="sql-string">'model_test'</span>,
+    <span class="sql-keyword">SUM</span>(<span class="sql-keyword">CASE WHEN</span> measure=<span class="sql-string">'MTM'</span> <span class="sql-keyword">THEN</span> value <span class="sql-keyword">END</span>),
+    <span class="sql-keyword">SUM</span>(<span class="sql-keyword">CASE WHEN</span> measure=<span class="sql-string">'CVA'</span> <span class="sql-keyword">THEN</span> value <span class="sql-keyword">END</span>), <span class="sql-keyword">NULL</span>, <span class="sql-keyword">NULL</span>
+<span class="sql-keyword">FROM</span> results.xva_daily <span class="sql-keyword">AT</span> (<span class="sql-keyword">BRANCH</span> => <span class="sql-string">'model_test'</span>)
+<span class="sql-keyword">WHERE</span> valuation_date = <span class="sql-string">'2024-01-16'</span>
+<span class="sql-keyword">UNION ALL</span>
+<span class="sql-keyword">SELECT</span> <span class="sql-string">'what_if'</span>,
+    <span class="sql-keyword">SUM</span>(<span class="sql-keyword">CASE WHEN</span> measure=<span class="sql-string">'MTM'</span> <span class="sql-keyword">THEN</span> value <span class="sql-keyword">END</span>),
+    <span class="sql-keyword">SUM</span>(<span class="sql-keyword">CASE WHEN</span> measure=<span class="sql-string">'CVA'</span> <span class="sql-keyword">THEN</span> value <span class="sql-keyword">END</span>), <span class="sql-keyword">NULL</span>,
+    <span class="sql-keyword">SUM</span>(<span class="sql-keyword">CASE WHEN</span> measure=<span class="sql-string">'FVA'</span> <span class="sql-keyword">THEN</span> value <span class="sql-keyword">END</span>)
+<span class="sql-keyword">FROM</span> results.xva_daily <span class="sql-keyword">AT</span> (<span class="sql-keyword">BRANCH</span> => <span class="sql-string">'what_if_trades'</span>)
+<span class="sql-keyword">WHERE</span> valuation_date = <span class="sql-string">'2024-01-16'</span>
+<span class="sql-keyword">UNION ALL</span>
+<span class="sql-keyword">SELECT</span> <span class="sql-string">'stress'</span>,
+    <span class="sql-keyword">SUM</span>(<span class="sql-keyword">CASE WHEN</span> measure=<span class="sql-string">'MTM'</span> <span class="sql-keyword">THEN</span> value <span class="sql-keyword">END</span>),
+    <span class="sql-keyword">SUM</span>(<span class="sql-keyword">CASE WHEN</span> measure=<span class="sql-string">'CVA'</span> <span class="sql-keyword">THEN</span> value <span class="sql-keyword">END</span>), <span class="sql-keyword">NULL</span>, <span class="sql-keyword">NULL</span>
+<span class="sql-keyword">FROM</span> results.xva_daily <span class="sql-keyword">AT</span> (<span class="sql-keyword">BRANCH</span> => <span class="sql-string">'stress_test'</span>)
+<span class="sql-keyword">WHERE</span> valuation_date = <span class="sql-string">'2024-01-16'</span>;</code></pre>
+
+    <table>
+        <thead>
+            <tr><th>Scenario</th><th>MTM</th><th>CVA</th><th>DVA</th><th>FVA</th><th>Purpose</th></tr>
+        </thead>
+        <tbody>
+            <tr style="background: #e8f0e8;"><td><strong>main</strong></td><td>1,320,000</td><td>-47,500</td><td>-</td><td>-</td><td>Production EOD</td></tr>
+            <tr style="background: #e8f0f5;"><td><strong>model_test</strong></td><td>4,800,000</td><td>-197,000</td><td>-</td><td>-</td><td>New SABR params</td></tr>
+            <tr style="background: #f5f0e8;"><td><strong>what_if</strong></td><td>3,820,000</td><td>-1,217,500</td><td>-</td><td>-125,000</td><td>+700M notional</td></tr>
+            <tr style="background: #f5e8e8;"><td><strong>stress</strong></td><td>-3,950,000</td><td>-418,000</td><td>-</td><td>-</td><td>+100bp, spreads +50%</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<!-- VALUE ASSESSMENT -->
+<h2 id="value">Value Assessment: Is Branching Worth It?</h2>
+
+<div class="value-box">
+    <h3>Where Branching Adds Clear Value</h3>
+    <ul class="benefit-list">
+        <li><strong>Pre-Trade Analysis</strong> - Sales can test hypothetical trades without sandbox copies</li>
+        <li><strong>Model Validation</strong> - Quants test new calibrations against production data</li>
+        <li><strong>Regulatory Stress Tests</strong> - Risk runs scenarios with full audit trail</li>
+        <li><strong>EOD Parallel Runs</strong> - Compare old vs new methodology before cutover</li>
+        <li><strong>No Infrastructure Overhead</strong> - No separate databases, no data copies</li>
+    </ul>
+</div>
+
+<div class="no-value-box">
+    <h3>Where Traditional Approaches May Be Better</h3>
+    <ul class="benefit-list" style="list-style: none;">
+        <li style="padding-left: 35px; position: relative;"><span style="position: absolute; left: 0; color: #a07070; font-weight: bold;">&#10007;</span> <strong>Real-time Pricing</strong> - Latency requirements favor kdb+/custom engines</li>
+        <li style="padding-left: 35px; position: relative;"><span style="position: absolute; left: 0; color: #a07070; font-weight: bold;">&#10007;</span> <strong>Massive Simulation Data</strong> - TBs of paths per day may need specialized storage</li>
+        <li style="padding-left: 35px; position: relative;"><span style="position: absolute; left: 0; color: #a07070; font-weight: bold;">&#10007;</span> <strong>Existing Infrastructure</strong> - Shops with kdb+/Snowflake already invested</li>
+    </ul>
+</div>
+
+<div class="comparison-grid">
+    <div class="comparison-card">
+        <h4 style="color: #6b8e6b;">Best Fit</h4>
+        <ul>
+            <li>Batch analytics / EOD valuations</li>
+            <li>Smaller shops without enterprise infra</li>
+            <li>Research / prototyping environments</li>
+            <li>Regulatory reporting with audit needs</li>
+        </ul>
+    </div>
+    <div class="comparison-card">
+        <h4 style="color: #a07070;">Not Ideal For</h4>
+        <ul>
+            <li>Sub-millisecond pricing requirements</li>
+            <li>Streaming Greeks / real-time risk</li>
+            <li>Multi-TB simulation path storage</li>
+        </ul>
+    </div>
+</div>
+
+<div class="key-point" style="margin-top: 40px;">
+    <strong>Bottom Line:</strong> DuckLake branching shines for batch XVA workflows where teams need isolated environments for model testing, what-if analysis, and stress scenarios - all without the overhead of separate databases or data copies. The killer combo is branching + time travel + Iceberg format + runs anywhere (laptop to cloud).
+</div>
+
+</body>
+</html>
