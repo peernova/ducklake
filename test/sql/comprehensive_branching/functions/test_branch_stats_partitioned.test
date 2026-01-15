@@ -1,0 +1,167 @@
+# name: test/sql/comprehensive_branching/functions/test_branch_stats_partitioned.test
+# description: Test ducklake_branch_stats with partitioned tables
+# group: [functions]
+
+require ducklake
+
+require parquet
+
+# Setup: Create DuckLake catalog
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/branch_stats_part_test.db' AS db (DATA_PATH '__TEST_DIR__/branch_stats_part_data');
+
+statement ok
+USE db;
+
+# ============================================================================
+# SETUP: Create partitioned table with data
+# ============================================================================
+
+statement ok
+CREATE TABLE sales (id INT, region VARCHAR, amount INT);
+
+statement ok
+ALTER TABLE sales SET PARTITIONED BY (region);
+
+# Insert 100 rows: 25 per region
+statement ok
+INSERT INTO sales SELECT i, 'east', 100+i FROM range(1, 26) t(i);
+
+statement ok
+INSERT INTO sales SELECT i+25, 'west', 200+i FROM range(1, 26) t(i);
+
+statement ok
+INSERT INTO sales SELECT i+50, 'north', 300+i FROM range(1, 26) t(i);
+
+statement ok
+INSERT INTO sales SELECT i+75, 'south', 400+i FROM range(1, 26) t(i);
+
+# Main branch should have 100 rows
+query I
+SELECT total_rows FROM ducklake_branch_stats('db', 'main');
+----
+100
+
+# ============================================================================
+# TEST 1: Delete from single partition on branch
+# ============================================================================
+
+statement ok
+SELECT * FROM ducklake_create_branch('db', 'branch_east');
+
+statement ok
+SELECT * FROM ducklake_use_branch('db', 'branch_east');
+
+statement ok
+DELETE FROM sales WHERE region='east' AND id <= 10;
+
+# branch_east should show 90 rows
+query I
+SELECT total_rows FROM ducklake_branch_stats('db', 'branch_east');
+----
+90
+
+query I
+SELECT COUNT(*) FROM sales;
+----
+90
+
+# ============================================================================
+# TEST 2: Main unchanged
+# ============================================================================
+
+statement ok
+SELECT * FROM ducklake_use_branch('db', 'main');
+
+query I
+SELECT total_rows FROM ducklake_branch_stats('db', 'main');
+----
+100
+
+# ============================================================================
+# TEST 3: Delete from different partition on sibling branch
+# ============================================================================
+
+statement ok
+SELECT * FROM ducklake_create_branch('db', 'branch_west');
+
+statement ok
+SELECT * FROM ducklake_use_branch('db', 'branch_west');
+
+statement ok
+DELETE FROM sales WHERE region='west' AND id <= 35;
+
+# branch_west should show 90 rows (deleted 10 from west partition)
+query I
+SELECT total_rows FROM ducklake_branch_stats('db', 'branch_west');
+----
+90
+
+query I
+SELECT COUNT(*) FROM sales;
+----
+90
+
+# ============================================================================
+# TEST 4: Child branch inherits parent deletes + adds more
+# ============================================================================
+
+statement ok
+SELECT * FROM ducklake_use_branch('db', 'branch_east');
+
+statement ok
+SELECT * FROM ducklake_create_branch('db', 'child_east');
+
+statement ok
+SELECT * FROM ducklake_use_branch('db', 'child_east');
+
+statement ok
+DELETE FROM sales WHERE region='north' AND id <= 60;
+
+# child_east: inherits 10 deletes from branch_east + 10 new from north = 80 rows
+query I
+SELECT total_rows FROM ducklake_branch_stats('db', 'child_east');
+----
+80
+
+query I
+SELECT COUNT(*) FROM sales;
+----
+80
+
+# ============================================================================
+# TEST 5: Multi-partition delete on branch
+# ============================================================================
+
+statement ok
+SELECT * FROM ducklake_use_branch('db', 'main');
+
+statement ok
+SELECT * FROM ducklake_create_branch('db', 'branch_multi');
+
+statement ok
+SELECT * FROM ducklake_use_branch('db', 'branch_multi');
+
+# Delete 3 rows from each partition
+statement ok
+DELETE FROM sales WHERE id IN (1,2,3, 26,27,28, 51,52,53, 76,77,78);
+
+# branch_multi should show 88 rows (100 - 12 deleted)
+query I
+SELECT total_rows FROM ducklake_branch_stats('db', 'branch_multi');
+----
+88
+
+query I
+SELECT COUNT(*) FROM sales;
+----
+88
+
+# ============================================================================
+# TEST 6: Verify data file count reflects partitions
+# ============================================================================
+
+query I
+SELECT data_file_count FROM ducklake_branch_stats('db', 'main');
+----
+4

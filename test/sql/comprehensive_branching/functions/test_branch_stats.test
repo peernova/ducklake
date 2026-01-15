@@ -1,0 +1,169 @@
+# name: test/sql/comprehensive_branching/functions/test_branch_stats.test
+# description: Test ducklake_branch_stats function with accurate row counts
+# group: [functions]
+
+require ducklake
+
+require parquet
+
+# Setup: Create DuckLake catalog
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/branch_stats_test.db' AS db (DATA_PATH '__TEST_DIR__/branch_stats_data');
+
+statement ok
+USE db;
+
+# ============================================================================
+# SETUP: Create table with data on main branch
+# ============================================================================
+
+statement ok
+CREATE TABLE test_data AS SELECT i as id, 'row_' || i as name FROM range(1, 101) t(i);
+
+# Main branch should have 100 rows
+query I
+SELECT total_rows FROM ducklake_branch_stats('db', 'main');
+----
+100
+
+query I
+SELECT COUNT(*) FROM test_data;
+----
+100
+
+# ============================================================================
+# TEST 1: Create branch and delete rows - stats should reflect deletes
+# ============================================================================
+
+statement ok
+SELECT * FROM ducklake_create_branch('db', 'branch_a');
+
+statement ok
+SELECT * FROM ducklake_use_branch('db', 'branch_a');
+
+statement ok
+DELETE FROM test_data WHERE id <= 10;
+
+# branch_a should show 90 rows (100 - 10 deleted)
+query I
+SELECT total_rows FROM ducklake_branch_stats('db', 'branch_a');
+----
+90
+
+query I
+SELECT COUNT(*) FROM test_data;
+----
+90
+
+# ============================================================================
+# TEST 2: Main branch should be unchanged
+# ============================================================================
+
+statement ok
+SELECT * FROM ducklake_use_branch('db', 'main');
+
+query I
+SELECT total_rows FROM ducklake_branch_stats('db', 'main');
+----
+100
+
+query I
+SELECT COUNT(*) FROM test_data;
+----
+100
+
+# ============================================================================
+# TEST 3: Create sibling branch with different deletes
+# ============================================================================
+
+statement ok
+SELECT * FROM ducklake_create_branch('db', 'branch_b');
+
+statement ok
+SELECT * FROM ducklake_use_branch('db', 'branch_b');
+
+statement ok
+DELETE FROM test_data WHERE id BETWEEN 50 AND 60;
+
+# branch_b should show 89 rows (100 - 11 deleted)
+query I
+SELECT total_rows FROM ducklake_branch_stats('db', 'branch_b');
+----
+89
+
+query I
+SELECT COUNT(*) FROM test_data;
+----
+89
+
+# ============================================================================
+# TEST 4: Create child branch from branch_a with additional deletes
+# ============================================================================
+
+statement ok
+SELECT * FROM ducklake_use_branch('db', 'branch_a');
+
+statement ok
+SELECT * FROM ducklake_create_branch('db', 'branch_c');
+
+statement ok
+SELECT * FROM ducklake_use_branch('db', 'branch_c');
+
+statement ok
+DELETE FROM test_data WHERE id BETWEEN 11 AND 16;
+
+# branch_c should show 84 rows (inherits 10 deletes from branch_a + 6 new = 16 total deleted)
+query I
+SELECT total_rows FROM ducklake_branch_stats('db', 'branch_c');
+----
+84
+
+query I
+SELECT COUNT(*) FROM test_data;
+----
+84
+
+# ============================================================================
+# TEST 5: Verify all branches have correct stats
+# ============================================================================
+
+statement ok
+SELECT * FROM ducklake_use_branch('db', 'main');
+
+query I
+SELECT total_rows FROM ducklake_branch_stats('db', 'main');
+----
+100
+
+statement ok
+SELECT * FROM ducklake_use_branch('db', 'branch_a');
+
+query I
+SELECT total_rows FROM ducklake_branch_stats('db', 'branch_a');
+----
+90
+
+statement ok
+SELECT * FROM ducklake_use_branch('db', 'branch_b');
+
+query I
+SELECT total_rows FROM ducklake_branch_stats('db', 'branch_b');
+----
+89
+
+statement ok
+SELECT * FROM ducklake_use_branch('db', 'branch_c');
+
+query I
+SELECT total_rows FROM ducklake_branch_stats('db', 'branch_c');
+----
+84
+
+# ============================================================================
+# TEST 6: Verify other stats fields
+# ============================================================================
+
+query IIII
+SELECT table_count, schema_count, view_count, data_file_count FROM ducklake_branch_stats('db', 'main');
+----
+1	1	0	1
