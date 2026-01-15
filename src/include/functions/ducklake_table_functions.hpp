@@ -153,4 +153,34 @@ public:
 	static TableFunction GetFunction();
 };
 
+class DuckLakeBranchCountFunction {
+public:
+	static TableFunctionSet GetFunctions();
+};
+
+class DuckLakeBranchStatsFunction {
+public:
+	static TableFunction GetFunction();
+};
+
+class DuckLakeSearchBranchesFunction {
+public:
+	static TableFunctionSet GetFunctions();
+};
+
+class DuckLakeBranchesByStatusFunction {
+public:
+	static TableFunction GetFunction();
+};
+
+class DuckLakeBranchesByAgeFunction {
+public:
+	static TableFunctionSet GetFunctions();
+};
+
+class DuckLakeBranchActivityFunction {
+public:
+	static TableFunctionSet GetFunctions();
+};
+
 } // namespace duckdb
