@@ -113,6 +113,10 @@ static void LoadInternal(ExtensionLoader &loader) {
 	auto branch_activity = DuckLakeBranchActivityFunction::GetFunctions();
 	loader.RegisterFunction(branch_activity);
 
+	// Query analysis functions
+	auto analyze_query = DuckLakeAnalyzeQueryFunction::GetFunction();
+	loader.RegisterFunction(analyze_query);
+
 	// secrets
 	auto secret_type = DuckLakeSecret::GetSecretType();
 	loader.RegisterSecretType(secret_type);

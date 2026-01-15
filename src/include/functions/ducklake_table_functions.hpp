@@ -183,4 +183,13 @@ public:
 	static TableFunctionSet GetFunctions();
 };
 
+//===--------------------------------------------------------------------===//
+// Query Analysis Functions
+//===--------------------------------------------------------------------===//
+
+class DuckLakeAnalyzeQueryFunction {
+public:
+	static TableFunction GetFunction();
+};
+
 } // namespace duckdb
