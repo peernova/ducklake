@@ -917,14 +917,36 @@ static void BranchStatsFunction(ClientContext &context, TableFunctionInput &data
 	auto file_chunk = file_result->Fetch();
 	int64_t file_count = file_chunk ? file_chunk->GetValue(0, 0).GetValue<int64_t>() : 0;
 
-	// Total rows and size from table stats
-	auto stats_result = transaction.Query(StringUtil::Format(
-	    "SELECT COALESCE(SUM(record_count), 0), COALESCE(SUM(file_size_bytes), 0) "
-	    "FROM {METADATA_CATALOG}.ducklake_table_stats WHERE branch_id = %lld",
-	    branch_id));
-	auto stats_chunk = stats_result->Fetch();
-	int64_t total_rows = stats_chunk ? stats_chunk->GetValue(0, 0).GetValue<int64_t>() : 0;
-	int64_t total_size = stats_chunk ? stats_chunk->GetValue(1, 0).GetValue<int64_t>() : 0;
+	// Total rows: sum of visible data file rows minus visible delete file rows
+	// This gives accurate row count accounting for deletes
+	// NOTE: This does NOT include inlined data rows. When inlined data is made branch-aware,
+	// update this query to also sum inlined data rows and subtract inlined deletes.
+	auto rows_result = transaction.Query(lineage_cte + StringUtil::Format(R"(
+		SELECT
+			COALESCE(SUM(df.record_count), 0) - COALESCE((
+				SELECT SUM(del.delete_count)
+				FROM {METADATA_CATALOG}.ducklake_delete_file del
+				JOIN branch_visibility del_bv ON del.branch_id = del_bv.ancestor_branch_id
+				WHERE del.begin_snapshot <= del_bv.max_visible_snapshot
+				  AND (del.end_snapshot IS NULL OR del.end_snapshot > del_bv.max_visible_snapshot)
+				  AND NOT EXISTS (
+				      SELECT 1 FROM {METADATA_CATALOG}.ducklake_branch_delete_file_deletion dfd
+				      WHERE dfd.branch_id = %lld AND dfd.delete_file_id = del.delete_file_id
+				  )
+			), 0) AS total_rows,
+			COALESCE(SUM(df.file_size_bytes), 0) AS total_size
+		FROM {METADATA_CATALOG}.ducklake_data_file df
+		JOIN branch_visibility bv ON df.branch_id = bv.ancestor_branch_id
+		WHERE df.begin_snapshot <= bv.max_visible_snapshot
+		  AND (df.end_snapshot IS NULL OR df.end_snapshot > bv.max_visible_snapshot)
+		  AND NOT EXISTS (
+		      SELECT 1 FROM {METADATA_CATALOG}.ducklake_branch_file_deletion fd
+		      WHERE fd.branch_id = %lld AND fd.data_file_id = df.data_file_id
+		  )
+	)", branch_id, branch_id));
+	auto rows_chunk = rows_result->Fetch();
+	int64_t total_rows = rows_chunk ? rows_chunk->GetValue(0, 0).GetValue<int64_t>() : 0;
+	int64_t total_size = rows_chunk ? rows_chunk->GetValue(1, 0).GetValue<int64_t>() : 0;
 
 	// Snapshot count
 	auto snapshot_result = transaction.Query(StringUtil::Format(

@@ -2038,6 +2038,12 @@ string DuckLakeMetadataManager::GetColumnType(const DuckLakeColumnInfo &col) {
 }
 
 string DuckLakeMetadataManager::GetInlinedTableQuery(const DuckLakeTableInfo &table, const string &table_name) {
+	// TODO: Inlined data tables are NOT branch-aware. The schema lacks a branch_id column,
+	// which means:
+	// 1. Deletes on branch B will set end_snapshot for ALL branches (not just branch B)
+	// 2. Reads don't filter by branch, so deleted rows appear deleted across all branches
+	// To fix: Add branch_id column to inlined tables, filter by branch in WriteNewInlinedDeletes
+	// and ReadInlinedData queries, similar to how ducklake_data_file handles branching.
 	string columns;
 
 	for (auto &col : table.columns) {
@@ -2365,6 +2371,10 @@ WHERE table_id = %d AND schema_version=(
 
 void DuckLakeMetadataManager::WriteNewInlinedDeletes(DuckLakeSnapshot commit_snapshot,
                                                      const vector<DuckLakeDeletedInlinedDataInfo> &new_deletes) {
+	// TODO: This function is NOT branch-aware. It sets end_snapshot globally without filtering by branch_id.
+	// When fixing this (adding branch_id to inlined tables), also update:
+	// - ducklake_branch_stats() in ducklake_branch_functions.cpp to include inlined data rows/deletes in total_rows
+	// - ReadInlinedData() to filter by branch
 	if (new_deletes.empty()) {
 		return;
 	}
