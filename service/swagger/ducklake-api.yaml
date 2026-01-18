@@ -1,0 +1,1997 @@
+openapi: 3.0.3
+info:
+  title: DuckLake Data Lakehouse API
+  description: |
+    REST API for DuckLake - Git-like branching for data lakehouses.
+
+    ## Overview
+    This API provides endpoints to:
+    - Execute SQL queries and return tabular results
+    - Manage data branches (create, delete, search, switch)
+    - Query branch metadata and statistics
+    - Perform time-travel queries
+    - Connect to multiple catalog types (DuckLake, Databricks, Snowflake)
+
+    ## Catalog Types
+    The service supports multiple catalog types:
+    - **DUCKLAKE**: Native DuckLake catalogs with full read/write access and branching support
+    - **DATABRICKS**: Databricks Unity Catalog (read-only, uses OAuth service principal)
+    - **SNOWFLAKE**: Snowflake database (read-only, not yet implemented)
+
+    ## Authentication
+    All endpoints require Bearer token authentication.
+
+    ## Error Handling
+    Errors follow Google's gRPC status code conventions.
+
+  version: 1.0.0
+  contact:
+    name: DuckLake Team
+    email: support@ducklake.io
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: https://api.ducklake.io/v1
+    description: Production server
+  - url: https://api.staging.ducklake.io/v1
+    description: Staging server
+  - url: http://localhost:8080/v1
+    description: Local development
+
+tags:
+  - name: Catalogs
+    description: Catalog management (attach, detach, list)
+  - name: Query
+    description: SQL query execution
+  - name: Branches
+    description: Branch management operations (DUCKLAKE catalogs only)
+  - name: Branch Stats
+    description: Branch statistics and metadata
+
+security:
+  - BearerAuth: []
+
+paths:
+  # ============================================================================
+  # QUERY (Cross-Catalog)
+  # ============================================================================
+  /query:
+    post:
+      tags:
+        - Query
+      summary: Execute SQL query
+      description: |
+        Executes a SQL query that can span multiple catalogs.
+
+        The service automatically:
+        1. Parses the SQL to identify referenced catalogs
+        2. Looks up catalog configurations from the registry
+        3. Attaches catalogs as needed (using connection pool)
+        4. Applies branch context per catalog
+        5. Executes the query and returns results
+
+        **Cross-catalog join example:**
+        ```sql
+        SELECT t.*, p.price
+        FROM xva_desk.trades.positions t
+        JOIN market_db.main.prices p ON t.instrument_id = p.id
+        ```
+      operationId: executeQuery
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QueryRequest'
+      responses:
+        '200':
+          description: Query executed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueryResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  # ============================================================================
+  # CATALOG REGISTRY
+  # ============================================================================
+  /catalogs:
+    get:
+      tags:
+        - Catalogs
+      summary: List registered catalogs
+      description: Returns a list of all catalogs registered in the service.
+      operationId: listCatalogs
+      parameters:
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/PageNumber'
+        - name: metadata_type
+          in: query
+          description: Filter by metadata backend type
+          schema:
+            type: string
+            enum: [postgres, duckdb, sqlite]
+        - name: storage_type
+          in: query
+          description: Filter by storage type
+          schema:
+            type: string
+            enum: [local, s3, gcs, azure]
+        - name: catalog_type
+          in: query
+          description: Filter by catalog type
+          schema:
+            type: string
+            enum: [DUCKLAKE, DATABRICKS, SNOWFLAKE]
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListCatalogsResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+    post:
+      tags:
+        - Catalogs
+      summary: Register catalog
+      description: |
+        Registers a new catalog in the service registry.
+
+        The catalog is not immediately attached - it's stored in the service's
+        metadata database and attached on-demand when queries reference it.
+
+        ## Catalog Types
+
+        **DUCKLAKE (default)** - Native DuckLake with full read/write and branching support:
+        - Required fields: `metadata_uri`, `data_path`
+        - Optional fields: `metadata_type`, `storage_type`, `secret_name`
+        - Metadata backends: PostgreSQL, DuckDB file, SQLite
+        - Data storage: Local, S3, GCS, Azure
+
+        **DATABRICKS** - Databricks Unity Catalog (read-only):
+        - Required fields: `databricks_workspace_url`, `databricks_client_id`,
+          `databricks_client_secret`, `databricks_catalog_name`
+        - Uses OAuth 2.0 client credentials flow for authentication
+
+        **SNOWFLAKE** - Snowflake database (read-only, not yet implemented):
+        - Required fields: `snowflake_account`, `snowflake_user`,
+          `snowflake_password`, `snowflake_database`
+        - Optional fields: `snowflake_warehouse`
+      operationId: registerCatalog
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterCatalogRequest'
+      responses:
+        '201':
+          description: Catalog registered successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Catalog'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /catalogs/{catalog_id}:
+    get:
+      tags:
+        - Catalogs
+      summary: Get catalog
+      description: Returns details of a registered catalog.
+      operationId: getCatalog
+      parameters:
+        - $ref: '#/components/parameters/CatalogId'
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Catalog'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+    patch:
+      tags:
+        - Catalogs
+      summary: Update catalog
+      description: Updates a registered catalog's configuration.
+      operationId: updateCatalog
+      parameters:
+        - $ref: '#/components/parameters/CatalogId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateCatalogRequest'
+      responses:
+        '200':
+          description: Catalog updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Catalog'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+    delete:
+      tags:
+        - Catalogs
+      summary: Unregister catalog
+      description: |
+        Removes a catalog from the service registry.
+        Does not delete any data in the catalog itself.
+      operationId: unregisterCatalog
+      parameters:
+        - $ref: '#/components/parameters/CatalogId'
+      responses:
+        '204':
+          description: Catalog unregistered successfully
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /catalogs/{catalog_id}:test:
+    post:
+      tags:
+        - Catalogs
+      summary: Test catalog connection
+      description: |
+        Tests connectivity to the catalog's metadata backend and data storage.
+        Returns detailed status of each component.
+      operationId: testCatalogConnection
+      parameters:
+        - $ref: '#/components/parameters/CatalogId'
+      responses:
+        '200':
+          description: Connection test completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CatalogTestResult'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  # ============================================================================
+  # CATALOG DISCOVERY (Schemas/Tables)
+  # ============================================================================
+  /catalogs/{catalog_id}/schemas:
+    get:
+      tags:
+        - Catalogs
+      summary: List schemas
+      description: Returns all schemas in the catalog visible from the current branch.
+      operationId: listSchemas
+      parameters:
+        - $ref: '#/components/parameters/CatalogId'
+        - name: branch
+          in: query
+          description: Branch to list schemas from (default current branch)
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListSchemasResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /catalogs/{catalog_id}/schemas/{schema_name}/tables:
+    get:
+      tags:
+        - Catalogs
+      summary: List tables
+      description: Returns all tables in the schema visible from the current branch.
+      operationId: listTables
+      parameters:
+        - $ref: '#/components/parameters/CatalogId'
+        - $ref: '#/components/parameters/SchemaName'
+        - name: branch
+          in: query
+          description: Branch to list tables from (default current branch)
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListTablesResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /catalogs/{catalog_id}/schemas/{schema_name}/tables/{table_name}:
+    get:
+      tags:
+        - Catalogs
+      summary: Get table info
+      description: Returns detailed information about a table including columns and statistics.
+      operationId: getTable
+      parameters:
+        - $ref: '#/components/parameters/CatalogId'
+        - $ref: '#/components/parameters/SchemaName'
+        - $ref: '#/components/parameters/TableName'
+        - name: branch
+          in: query
+          description: Branch to get table from (default current branch)
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TableInfo'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  # ============================================================================
+  # BRANCHES (Per-Catalog)
+  # ============================================================================
+  /catalogs/{catalog_id}/branches:
+    get:
+      tags:
+        - Branches
+      summary: List branches
+      description: |
+        Returns a list of all branches in the catalog.
+
+        **Note:** Branching is only supported for DUCKLAKE catalogs.
+        For DATABRICKS and SNOWFLAKE catalogs, this endpoint will return an error.
+      operationId: listBranches
+      parameters:
+        - $ref: '#/components/parameters/CatalogId'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/PageNumber'
+        - name: status
+          in: query
+          description: Filter by branch status
+          schema:
+            type: string
+            enum: [active, merged, archived, deleted]
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListBranchesResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+    post:
+      tags:
+        - Branches
+      summary: Create branch
+      description: |
+        Creates a new branch from an existing branch at a specific snapshot.
+
+        **Note:** Branching is only supported for DUCKLAKE catalogs.
+      operationId: createBranch
+      parameters:
+        - $ref: '#/components/parameters/CatalogId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateBranchRequest'
+      responses:
+        '201':
+          description: Branch created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Branch'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /catalogs/{catalog_id}/branches:search:
+    post:
+      tags:
+        - Branches
+      summary: Search branches
+      description: |
+        Search branches with flexible filtering by name pattern, status,
+        creation date, and parent branch.
+      operationId: searchBranches
+      parameters:
+        - $ref: '#/components/parameters/CatalogId'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/PageNumber'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SearchBranchesRequest'
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListBranchesResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /catalogs/{catalog_id}/branches/{branch_name}:
+    get:
+      tags:
+        - Branches
+      summary: Get branch
+      description: Returns details of a specific branch.
+      operationId: getBranch
+      parameters:
+        - $ref: '#/components/parameters/CatalogId'
+        - $ref: '#/components/parameters/BranchName'
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Branch'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+    delete:
+      tags:
+        - Branches
+      summary: Delete branch
+      description: Soft-deletes a branch (sets status to 'deleted').
+      operationId: deleteBranch
+      parameters:
+        - $ref: '#/components/parameters/CatalogId'
+        - $ref: '#/components/parameters/BranchName'
+      responses:
+        '204':
+          description: Branch deleted successfully
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /catalogs/{catalog_id}/branches/{branch_name}:use:
+    post:
+      tags:
+        - Branches
+      summary: Switch to branch
+      description: Sets the working branch for subsequent write operations.
+      operationId: useBranch
+      parameters:
+        - $ref: '#/components/parameters/CatalogId'
+        - $ref: '#/components/parameters/BranchName'
+      responses:
+        '200':
+          description: Branch switched successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UseBranchResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  # ============================================================================
+  # BRANCH STATS & METADATA
+  # ============================================================================
+  /catalogs/{catalog_id}/branches:count:
+    get:
+      tags:
+        - Branch Stats
+      summary: Count branches
+      description: Returns the total count of branches, optionally filtered by status.
+      operationId: countBranches
+      parameters:
+        - $ref: '#/components/parameters/CatalogId'
+        - name: status
+          in: query
+          description: Filter by branch status
+          schema:
+            type: string
+            enum: [active, merged, archived, deleted]
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BranchCountResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /catalogs/{catalog_id}/branches/{branch_name}/stats:
+    get:
+      tags:
+        - Branch Stats
+      summary: Get branch statistics
+      description: |
+        Returns detailed statistics for a branch including table count,
+        schema count, file count, row count, and size.
+      operationId: getBranchStats
+      parameters:
+        - $ref: '#/components/parameters/CatalogId'
+        - $ref: '#/components/parameters/BranchName'
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BranchStats'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /catalogs/{catalog_id}/branches/{branch_name}/lineage:
+    get:
+      tags:
+        - Branch Stats
+      summary: Get branch lineage
+      description: Returns the ancestry chain of a branch from root to current.
+      operationId: getBranchLineage
+      parameters:
+        - $ref: '#/components/parameters/CatalogId'
+        - $ref: '#/components/parameters/BranchName'
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BranchLineageResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /catalogs/{catalog_id}/branches:activity:
+    get:
+      tags:
+        - Branch Stats
+      summary: List branches by activity
+      description: Returns branches sorted by activity (last modified, created, or snapshot count).
+      operationId: getBranchActivity
+      parameters:
+        - $ref: '#/components/parameters/CatalogId'
+        - name: order_by
+          in: query
+          description: Field to order by
+          schema:
+            type: string
+            enum: [last_modified, created, snapshot_count]
+            default: last_modified
+        - name: limit
+          in: query
+          description: Maximum number of results
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BranchActivityResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /catalogs/{catalog_id}/branches:by-age:
+    get:
+      tags:
+        - Branch Stats
+      summary: List branches by age
+      description: |
+        Returns branches filtered by age.
+        Positive days = older than N days, negative = newer than N days.
+      operationId: getBranchesByAge
+      parameters:
+        - $ref: '#/components/parameters/CatalogId'
+        - name: days
+          in: query
+          required: true
+          description: Number of days (positive=older than, negative=newer than)
+          schema:
+            type: integer
+            example: -7
+        - name: status
+          in: query
+          description: Filter by branch status
+          schema:
+            type: string
+            enum: [active, merged, archived, deleted]
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListBranchesResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /catalogs/{catalog_id}/current-branch:
+    get:
+      tags:
+        - Branches
+      summary: Get current branch
+      description: Returns the currently active working branch.
+      operationId: getCurrentBranch
+      parameters:
+        - $ref: '#/components/parameters/CatalogId'
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CurrentBranchResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+# ============================================================================
+# COMPONENTS
+# ============================================================================
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT token for authentication
+
+  # --------------------------------------------------------------------------
+  # PARAMETERS
+  # --------------------------------------------------------------------------
+  parameters:
+    CatalogId:
+      name: catalog_id
+      in: path
+      required: true
+      description: Unique identifier for the DuckLake catalog
+      schema:
+        type: string
+        example: "my_lakehouse"
+
+    BranchName:
+      name: branch_name
+      in: path
+      required: true
+      description: Name of the branch
+      schema:
+        type: string
+        example: "feature_analytics"
+
+    SchemaName:
+      name: schema_name
+      in: path
+      required: true
+      description: Name of the schema
+      schema:
+        type: string
+        example: "main"
+
+    TableName:
+      name: table_name
+      in: path
+      required: true
+      description: Name of the table
+      schema:
+        type: string
+        example: "customers"
+
+    PageSize:
+      name: page_size
+      in: query
+      description: Number of items per page
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 10
+
+    PageNumber:
+      name: page_number
+      in: query
+      description: Page number (starts from 1)
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+
+  # --------------------------------------------------------------------------
+  # SCHEMAS
+  # --------------------------------------------------------------------------
+  schemas:
+    # Common
+    Page:
+      type: object
+      description: Pagination information
+      properties:
+        size:
+          type: integer
+          format: int32
+          description: Size of page
+          example: 10
+        page_number:
+          type: integer
+          format: int32
+          description: Page number (starts from 1)
+          example: 1
+        total_number_of_elements:
+          type: integer
+          format: int64
+          description: Total number of elements
+          example: 42
+
+    # Catalog
+    Catalog:
+      type: object
+      properties:
+        catalog_id:
+          type: string
+          description: Catalog identifier (alias name)
+          example: "my_lakehouse"
+        display_name:
+          type: string
+          description: Human-readable display name
+          example: "XVA Trading Desk"
+        description:
+          type: string
+          description: Description of the catalog
+          example: "Production XVA risk calculations and trade data"
+        catalog_type:
+          type: string
+          enum: [DUCKLAKE, DATABRICKS, SNOWFLAKE]
+          description: |
+            Type of catalog:
+            - DUCKLAKE: Native DuckLake with full read/write and branching support
+            - DATABRICKS: Databricks Unity Catalog (read-only)
+            - SNOWFLAKE: Snowflake database (read-only, not yet implemented)
+          example: "DUCKLAKE"
+        supports_branching:
+          type: boolean
+          description: Whether this catalog supports branching operations
+          example: true
+        read_only:
+          type: boolean
+          description: Whether this catalog is read-only
+          example: false
+        # DuckLake-specific fields
+        metadata_uri:
+          type: string
+          description: Metadata backend connection string (credentials masked). DuckLake only.
+          example: "postgres:dbname=mydb host=localhost port=5432"
+        data_path:
+          type: string
+          description: Data storage path. DuckLake only.
+          example: "s3://my-bucket/lakehouse"
+        metadata_type:
+          type: string
+          enum: [postgres, duckdb, sqlite]
+          description: Type of metadata backend. DuckLake only.
+          example: "postgres"
+        storage_type:
+          type: string
+          enum: [local, s3, gcs, azure]
+          description: Type of data storage. DuckLake only.
+          example: "s3"
+        # Databricks-specific fields
+        databricks_workspace_url:
+          type: string
+          description: Databricks workspace URL. Databricks only.
+          example: "https://dbc-xxxxx.cloud.databricks.com"
+        databricks_catalog_name:
+          type: string
+          description: Unity Catalog name. Databricks only.
+          example: "my_unity_catalog"
+        # Snowflake-specific fields
+        snowflake_account:
+          type: string
+          description: Snowflake account identifier. Snowflake only.
+          example: "xy12345.us-east-1"
+        snowflake_database:
+          type: string
+          description: Snowflake database name. Snowflake only.
+          example: "my_database"
+        snowflake_warehouse:
+          type: string
+          description: Snowflake warehouse name. Snowflake only.
+          example: "compute_wh"
+        branch_count:
+          type: integer
+          format: int32
+          description: Number of branches in catalog
+          example: 5
+        table_count:
+          type: integer
+          format: int32
+          description: Number of tables in catalog
+          example: 24
+        total_size_bytes:
+          type: integer
+          format: int64
+          description: Total data size in bytes
+          example: 1073741824
+        enabled:
+          type: boolean
+          description: Whether the catalog is enabled
+          example: true
+        tags:
+          type: array
+          items:
+            type: string
+          description: Tags for categorization
+          example: ["production", "trading", "xva"]
+        options:
+          type: object
+          additionalProperties:
+            type: string
+          description: Additional catalog options
+          example:
+            read_only: "false"
+            encryption: "AES256"
+        created_at:
+          type: string
+          format: date-time
+          description: When the catalog was registered
+          example: "2024-01-01T00:00:00Z"
+        created_by:
+          type: string
+          description: User who registered the catalog
+          example: "john.doe@company.com"
+        updated_at:
+          type: string
+          format: date-time
+          description: When the catalog was last updated
+          example: "2024-01-15T10:30:00Z"
+        last_accessed_at:
+          type: string
+          format: date-time
+          description: When the catalog was last queried
+          example: "2024-01-15T14:30:00Z"
+
+    RegisterCatalogRequest:
+      type: object
+      required:
+        - catalog_id
+      properties:
+        catalog_id:
+          type: string
+          maxLength: 255
+          pattern: '^[a-zA-Z][a-zA-Z0-9_]*$'
+          description: Unique identifier for the catalog (alias name)
+          example: "my_lakehouse"
+        display_name:
+          type: string
+          maxLength: 255
+          description: Human-readable display name
+          example: "XVA Trading Desk"
+        description:
+          type: string
+          maxLength: 1000
+          description: Description of the catalog
+          example: "Production XVA risk calculations and trade data"
+        catalog_type:
+          type: string
+          enum: [DUCKLAKE, DATABRICKS, SNOWFLAKE]
+          default: DUCKLAKE
+          description: |
+            Type of catalog to register:
+            - DUCKLAKE: Native DuckLake with full read/write and branching support (default)
+            - DATABRICKS: Databricks Unity Catalog (read-only)
+            - SNOWFLAKE: Snowflake database (read-only, not yet implemented)
+          example: "DUCKLAKE"
+        # DuckLake-specific fields (required when catalog_type=DUCKLAKE)
+        metadata_uri:
+          type: string
+          description: |
+            Metadata backend connection string (required for DUCKLAKE):
+            - PostgreSQL: `postgres:dbname=mydb host=localhost port=5432 user=user password=pass`
+            - DuckDB file: `myfile.ducklake`
+            - SQLite: `sqlite:myfile.db`
+          example: "postgres:dbname=xva_desk host=localhost port=5433"
+        metadata_type:
+          type: string
+          enum: [postgres, duckdb, sqlite]
+          description: Type of metadata backend (DUCKLAKE only)
+          example: "postgres"
+        data_path:
+          type: string
+          description: |
+            Data storage path (required for DUCKLAKE):
+            - Local: `/path/to/data`
+            - S3: `s3://bucket/path`
+            - GCS: `gs://bucket/path`
+            - Azure: `az://container/path`
+          example: "/tmp/xva_desk"
+        storage_type:
+          type: string
+          enum: [local, s3, gcs, azure]
+          description: Type of data storage (DUCKLAKE only)
+          example: "local"
+        secret_name:
+          type: string
+          description: Name of secret for storage credentials (DUCKLAKE only)
+          example: "my_s3_secret"
+        # Databricks-specific fields (required when catalog_type=DATABRICKS)
+        databricks_workspace_url:
+          type: string
+          description: Databricks workspace URL (required for DATABRICKS)
+          example: "https://dbc-xxxxx.cloud.databricks.com"
+        databricks_client_id:
+          type: string
+          description: Service principal client ID for OAuth (required for DATABRICKS)
+          example: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+        databricks_client_secret:
+          type: string
+          format: password
+          description: Service principal client secret for OAuth (required for DATABRICKS)
+          example: "dosexxxxxxxxxxxxxxxxxxxxxxx"
+        databricks_catalog_name:
+          type: string
+          description: Unity Catalog name (required for DATABRICKS)
+          example: "my_unity_catalog"
+        # Snowflake-specific fields (required when catalog_type=SNOWFLAKE)
+        snowflake_account:
+          type: string
+          description: Snowflake account identifier (required for SNOWFLAKE)
+          example: "xy12345.us-east-1"
+        snowflake_user:
+          type: string
+          description: Snowflake username (required for SNOWFLAKE)
+          example: "my_user"
+        snowflake_password:
+          type: string
+          format: password
+          description: Snowflake password (required for SNOWFLAKE)
+          example: "my_password"
+        snowflake_database:
+          type: string
+          description: Snowflake database name (required for SNOWFLAKE)
+          example: "my_database"
+        snowflake_warehouse:
+          type: string
+          description: Snowflake warehouse name (optional for SNOWFLAKE)
+          example: "compute_wh"
+        # Common fields
+        options:
+          type: object
+          additionalProperties:
+            type: string
+          description: Additional catalog options
+          example:
+            read_only: "false"
+        tags:
+          type: array
+          items:
+            type: string
+          description: Tags for categorization
+          example: ["production", "trading", "xva"]
+
+    UpdateCatalogRequest:
+      type: object
+      properties:
+        display_name:
+          type: string
+          maxLength: 255
+          description: Human-readable display name
+          example: "XVA Trading Desk (Updated)"
+        description:
+          type: string
+          maxLength: 1000
+          description: Description of the catalog
+          example: "Updated production XVA data"
+        metadata_uri:
+          type: string
+          description: Updated metadata backend connection string
+          example: "postgres:dbname=xva_desk_v2 host=localhost port=5433"
+        data_path:
+          type: string
+          description: Updated data storage path
+          example: "s3://new-bucket/xva_desk"
+        options:
+          type: object
+          additionalProperties:
+            type: string
+          description: Updated catalog options
+        secret_name:
+          type: string
+          description: Updated secret name for storage credentials
+        tags:
+          type: array
+          items:
+            type: string
+          description: Updated tags
+        enabled:
+          type: boolean
+          description: Enable or disable the catalog
+          default: true
+
+    CatalogTestResult:
+      type: object
+      properties:
+        catalog_id:
+          type: string
+          description: Catalog being tested
+          example: "my_lakehouse"
+        overall_status:
+          type: string
+          enum: [healthy, degraded, unhealthy]
+          description: Overall health status
+          example: "healthy"
+        metadata_backend:
+          type: object
+          properties:
+            status:
+              type: string
+              enum: [connected, error]
+              description: Metadata backend connection status
+              example: "connected"
+            latency_ms:
+              type: number
+              format: double
+              description: Connection latency in milliseconds
+              example: 12.5
+            version:
+              type: string
+              description: Backend version info
+              example: "PostgreSQL 15.4"
+            error:
+              type: string
+              description: Error message if connection failed
+        data_storage:
+          type: object
+          properties:
+            status:
+              type: string
+              enum: [accessible, error]
+              description: Data storage accessibility status
+              example: "accessible"
+            latency_ms:
+              type: number
+              format: double
+              description: Access latency in milliseconds
+              example: 45.2
+            path:
+              type: string
+              description: Tested path
+              example: "s3://my-bucket/lakehouse"
+            error:
+              type: string
+              description: Error message if access failed
+        branch_count:
+          type: integer
+          format: int32
+          description: Number of branches in catalog
+          example: 5
+        table_count:
+          type: integer
+          format: int32
+          description: Number of tables in catalog
+          example: 24
+        tested_at:
+          type: string
+          format: date-time
+          description: When the test was performed
+          example: "2024-01-15T10:30:00Z"
+
+    ListCatalogsResponse:
+      type: object
+      properties:
+        catalogs:
+          type: array
+          items:
+            $ref: '#/components/schemas/Catalog'
+        page:
+          $ref: '#/components/schemas/Page'
+
+    # Schema/Table
+    SchemaInfo:
+      type: object
+      properties:
+        schema_id:
+          type: integer
+          format: int64
+          description: Internal schema ID
+          example: 1
+        schema_name:
+          type: string
+          description: Schema name
+          example: "main"
+        path:
+          type: string
+          description: Schema data path
+          example: "/data/main"
+        table_count:
+          type: integer
+          format: int32
+          description: Number of tables in schema
+          example: 10
+        view_count:
+          type: integer
+          format: int32
+          description: Number of views in schema
+          example: 5
+        created_at:
+          type: string
+          format: date-time
+          description: Schema creation time
+          example: "2024-01-01T00:00:00Z"
+
+    ListSchemasResponse:
+      type: object
+      properties:
+        schemas:
+          type: array
+          items:
+            $ref: '#/components/schemas/SchemaInfo'
+        page:
+          $ref: '#/components/schemas/Page'
+
+    TableInfo:
+      type: object
+      properties:
+        table_id:
+          type: integer
+          format: int64
+          description: Internal table ID
+          example: 1
+        table_name:
+          type: string
+          description: Table name
+          example: "customers"
+        schema_name:
+          type: string
+          description: Parent schema name
+          example: "main"
+        path:
+          type: string
+          description: Table data path
+          example: "/data/main/customers"
+        columns:
+          type: array
+          items:
+            $ref: '#/components/schemas/ColumnInfo'
+        row_count:
+          type: integer
+          format: int64
+          description: Approximate row count
+          example: 1000000
+        file_count:
+          type: integer
+          format: int32
+          description: Number of data files
+          example: 24
+        total_size_bytes:
+          type: integer
+          format: int64
+          description: Total data size in bytes
+          example: 104857600
+        partition_columns:
+          type: array
+          items:
+            type: string
+          description: Partition column names
+          example: ["date", "region"]
+        created_at:
+          type: string
+          format: date-time
+          description: Table creation time
+          example: "2024-01-01T00:00:00Z"
+        last_modified_at:
+          type: string
+          format: date-time
+          description: Last modification time
+          example: "2024-01-15T14:30:00Z"
+
+    ListTablesResponse:
+      type: object
+      properties:
+        tables:
+          type: array
+          items:
+            $ref: '#/components/schemas/TableInfo'
+        page:
+          $ref: '#/components/schemas/Page'
+
+    # Query
+    QueryRequest:
+      type: object
+      required:
+        - sql
+      properties:
+        sql:
+          type: string
+          description: |
+            SQL query to execute. Can reference multiple catalogs.
+            Use `catalog.schema.table` format for cross-catalog queries.
+          example: "SELECT t.*, p.price FROM xva_desk.trades.positions t JOIN market_db.main.prices p ON t.instrument_id = p.id"
+        branch_context:
+          type: object
+          additionalProperties:
+            type: string
+          description: |
+            Branch context per catalog. Keys are catalog IDs, values are branch names.
+            If not specified for a catalog, uses 'main' branch.
+          example:
+            xva_desk: "feature_analytics"
+            market_db: "main"
+        snapshot_context:
+          type: object
+          additionalProperties:
+            type: integer
+          description: |
+            Snapshot context per catalog for time-travel queries.
+            Keys are catalog IDs, values are snapshot IDs.
+          example:
+            xva_desk: 34
+        parameters:
+          type: object
+          additionalProperties: true
+          description: Query parameters for parameterized queries
+          example:
+            start_date: "2024-01-01"
+            end_date: "2024-12-31"
+        timeout_ms:
+          type: integer
+          format: int64
+          description: Query timeout in milliseconds (default 30000)
+          example: 60000
+          default: 30000
+
+    QueryResponse:
+      type: object
+      properties:
+        columns:
+          type: array
+          description: Column metadata
+          items:
+            $ref: '#/components/schemas/ColumnInfo'
+        rows:
+          type: array
+          description: Result rows
+          items:
+            type: array
+            items:
+              oneOf:
+                - type: string
+                - type: number
+                - type: boolean
+                - type: 'null'
+        row_count:
+          type: integer
+          format: int64
+          description: Number of rows returned
+          example: 10
+        execution_time_ms:
+          type: number
+          format: double
+          description: Query execution time in milliseconds
+          example: 45.2
+        branch:
+          type: string
+          description: Branch context used for the query
+          example: "main"
+        snapshot_id:
+          type: integer
+          format: int64
+          description: Snapshot ID at time of query
+          example: 34
+
+    ColumnInfo:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Column name
+          example: "customer_id"
+        type:
+          type: string
+          description: Column data type
+          example: "BIGINT"
+        nullable:
+          type: boolean
+          description: Whether column allows NULL values
+          example: true
+
+    # Branch
+    Branch:
+      type: object
+      properties:
+        branch_id:
+          type: integer
+          format: int64
+          description: Unique branch identifier
+          example: 1
+        branch_name:
+          type: string
+          description: Branch name
+          example: "feature_analytics"
+        parent_branch_id:
+          type: integer
+          format: int64
+          nullable: true
+          description: Parent branch ID (null for main)
+          example: 0
+        parent_branch_name:
+          type: string
+          nullable: true
+          description: Parent branch name
+          example: "main"
+        fork_snapshot_id:
+          type: integer
+          format: int64
+          nullable: true
+          description: Snapshot ID where branch was forked
+          example: 10
+        head_snapshot_id:
+          type: integer
+          format: int64
+          description: Current head snapshot ID
+          example: 15
+        created_at:
+          type: string
+          format: date-time
+          description: Branch creation timestamp
+          example: "2024-01-15T10:30:00Z"
+        status:
+          type: string
+          enum: [active, merged, archived, deleted]
+          description: Branch status
+          example: "active"
+
+    CreateBranchRequest:
+      type: object
+      required:
+        - branch_name
+      properties:
+        branch_name:
+          type: string
+          maxLength: 255
+          pattern: '^[a-zA-Z][a-zA-Z0-9_-]*$'
+          description: Name for the new branch
+          example: "feature_new_model"
+        parent_branch:
+          type: string
+          description: Parent branch name (default current working branch)
+          example: "main"
+        fork_snapshot_id:
+          type: integer
+          format: int64
+          description: Optional snapshot ID to fork from (default parent's head)
+          example: 10
+
+    SearchBranchesRequest:
+      type: object
+      properties:
+        pattern:
+          type: string
+          description: Name pattern (supports SQL LIKE wildcards % and _)
+          example: "feature_%"
+        status:
+          type: string
+          enum: [active, merged, archived, deleted]
+          description: Filter by status
+          example: "active"
+        created_after:
+          type: string
+          format: date-time
+          description: Filter branches created after this time
+          example: "2024-01-01T00:00:00Z"
+        created_before:
+          type: string
+          format: date-time
+          description: Filter branches created before this time
+          example: "2024-12-31T23:59:59Z"
+        parent_branch:
+          type: string
+          description: Filter by parent branch name
+          example: "main"
+
+    ListBranchesResponse:
+      type: object
+      properties:
+        branches:
+          type: array
+          items:
+            $ref: '#/components/schemas/Branch'
+        page:
+          $ref: '#/components/schemas/Page'
+
+    UseBranchResponse:
+      type: object
+      properties:
+        catalog:
+          type: string
+          description: Catalog name
+          example: "my_lakehouse"
+        branch_name:
+          type: string
+          description: Active branch name
+          example: "feature_analytics"
+        branch_id:
+          type: integer
+          format: int64
+          description: Active branch ID
+          example: 1
+        head_snapshot_id:
+          type: integer
+          format: int64
+          description: Current head snapshot
+          example: 15
+
+    CurrentBranchResponse:
+      type: object
+      properties:
+        catalog:
+          type: string
+          description: Catalog name
+          example: "my_lakehouse"
+        branch_name:
+          type: string
+          description: Current working branch name
+          example: "main"
+        branch_id:
+          type: integer
+          format: int64
+          description: Current working branch ID
+          example: 0
+        head_snapshot_id:
+          type: integer
+          format: int64
+          description: Current head snapshot
+          example: 34
+
+    # Branch Stats
+    BranchCountResponse:
+      type: object
+      properties:
+        count:
+          type: integer
+          format: int64
+          description: Number of branches
+          example: 5
+        status_filter:
+          type: string
+          description: Status filter applied (or 'all')
+          example: "active"
+
+    BranchStats:
+      type: object
+      properties:
+        branch_name:
+          type: string
+          description: Branch name
+          example: "main"
+        table_count:
+          type: integer
+          format: int64
+          description: Number of tables
+          example: 10
+        schema_count:
+          type: integer
+          format: int64
+          description: Number of schemas
+          example: 3
+        view_count:
+          type: integer
+          format: int64
+          description: Number of views
+          example: 5
+        data_file_count:
+          type: integer
+          format: int64
+          description: Number of data files
+          example: 24
+        total_rows:
+          type: integer
+          format: int64
+          description: Total row count
+          example: 1000000
+        total_size_bytes:
+          type: integer
+          format: int64
+          description: Total data size in bytes
+          example: 104857600
+        snapshot_count:
+          type: integer
+          format: int64
+          description: Number of snapshots on this branch
+          example: 35
+
+    BranchLineageResponse:
+      type: object
+      properties:
+        branch_name:
+          type: string
+          description: Target branch name
+          example: "feature_nested"
+        lineage:
+          type: array
+          description: Ancestry chain from root to branch
+          items:
+            $ref: '#/components/schemas/LineageEntry'
+
+    LineageEntry:
+      type: object
+      properties:
+        branch_id:
+          type: integer
+          format: int64
+          description: Branch ID in lineage
+          example: 0
+        ancestor_branch_id:
+          type: integer
+          format: int64
+          description: Ancestor branch ID
+          example: 0
+        max_visible_snapshot:
+          type: integer
+          format: int64
+          description: Maximum visible snapshot from this ancestor
+          example: 9223372036854775807
+
+    BranchActivityResponse:
+      type: object
+      properties:
+        branches:
+          type: array
+          items:
+            $ref: '#/components/schemas/BranchActivity'
+
+    BranchActivity:
+      type: object
+      properties:
+        branch_id:
+          type: integer
+          format: int64
+          description: Branch ID
+          example: 0
+        branch_name:
+          type: string
+          description: Branch name
+          example: "main"
+        created_at:
+          type: string
+          format: date-time
+          description: Branch creation time
+          example: "2024-01-01T00:00:00Z"
+        last_modified_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Last modification time
+          example: "2024-01-15T14:30:00Z"
+        snapshot_count:
+          type: integer
+          format: int64
+          description: Number of snapshots
+          example: 35
+        head_snapshot_id:
+          type: integer
+          format: int64
+          description: Current head snapshot
+          example: 34
+        status:
+          type: string
+          enum: [active, merged, archived, deleted]
+          description: Branch status
+          example: "active"
+
+    # Error Schemas
+    Status:
+      type: object
+      description: |
+        Error response following google.rpc.Status format.
+        See: https://cloud.google.com/apis/design/errors
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: integer
+          format: int32
+          description: gRPC status code
+          example: 5
+        message:
+          type: string
+          description: Human-readable error message
+          example: "Branch not found"
+        details:
+          type: array
+          description: Structured error details
+          items:
+            oneOf:
+              - $ref: '#/components/schemas/BadRequestDetail'
+              - $ref: '#/components/schemas/ResourceInfo'
+              - $ref: '#/components/schemas/ErrorInfo'
+
+    BadRequestDetail:
+      type: object
+      description: Describes violations in a client request
+      properties:
+        '@type':
+          type: string
+          example: "type.googleapis.com/google.rpc.BadRequest"
+        field_violations:
+          type: array
+          items:
+            $ref: '#/components/schemas/FieldViolation'
+
+    FieldViolation:
+      type: object
+      properties:
+        field:
+          type: string
+          description: Field path that caused the error
+          example: "branch_name"
+        description:
+          type: string
+          description: Description of the violation
+          example: "Branch name is required"
+
+    ResourceInfo:
+      type: object
+      description: Information about the resource involved in the error
+      properties:
+        '@type':
+          type: string
+          example: "type.googleapis.com/google.rpc.ResourceInfo"
+        resource_type:
+          type: string
+          description: Type of resource
+          example: "Branch"
+        resource_name:
+          type: string
+          description: Name of the resource
+          example: "feature_nonexistent"
+        owner:
+          type: string
+          description: Service that owns the resource
+          example: "ducklake-service"
+        description:
+          type: string
+          description: Human-readable description
+          example: "The requested branch does not exist"
+
+    ErrorInfo:
+      type: object
+      description: Additional error information
+      properties:
+        '@type':
+          type: string
+          example: "type.googleapis.com/google.rpc.ErrorInfo"
+        reason:
+          type: string
+          description: Error reason code
+          example: "BRANCH_NOT_FOUND"
+        domain:
+          type: string
+          description: Error domain
+          example: "ducklake.io"
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+          description: Additional metadata
+          example:
+            catalog_id: "my_lakehouse"
+            branch_name: "feature_nonexistent"
+
+  # --------------------------------------------------------------------------
+  # RESPONSES
+  # --------------------------------------------------------------------------
+  responses:
+    BadRequest:
+      description: Invalid request parameters (gRPC code 3 - INVALID_ARGUMENT)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Status'
+          examples:
+            validationFailed:
+              summary: Validation failed
+              value:
+                code: 3
+                message: "Validation failed"
+                details:
+                  - '@type': "type.googleapis.com/google.rpc.BadRequest"
+                    field_violations:
+                      - field: "branch_name"
+                        description: "Branch name is required"
+                      - field: "branch_name"
+                        description: "Branch name must start with a letter"
+            invalidSQL:
+              summary: Invalid SQL syntax
+              value:
+                code: 3
+                message: "SQL syntax error"
+                details:
+                  - '@type': "type.googleapis.com/google.rpc.ErrorInfo"
+                    reason: "INVALID_SQL"
+                    domain: "ducklake.io"
+                    metadata:
+                      position: "15"
+                      expected: "FROM"
+
+    Unauthorized:
+      description: Missing or invalid authentication (gRPC code 16 - UNAUTHENTICATED)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Status'
+          examples:
+            unauthenticated:
+              summary: No token provided
+              value:
+                code: 16
+                message: "Authentication required"
+                details:
+                  - '@type': "type.googleapis.com/google.rpc.ErrorInfo"
+                    reason: "CREDENTIALS_MISSING"
+                    domain: "ducklake.io"
+            tokenExpired:
+              summary: Token expired
+              value:
+                code: 16
+                message: "Token has expired"
+                details:
+                  - '@type': "type.googleapis.com/google.rpc.ErrorInfo"
+                    reason: "TOKEN_EXPIRED"
+                    domain: "ducklake.io"
+
+    Forbidden:
+      description: Insufficient permissions (gRPC code 7 - PERMISSION_DENIED)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Status'
+          examples:
+            permissionDenied:
+              summary: No access to catalog
+              value:
+                code: 7
+                message: "Permission denied"
+                details:
+                  - '@type': "type.googleapis.com/google.rpc.ErrorInfo"
+                    reason: "PERMISSION_DENIED"
+                    domain: "ducklake.io"
+                    metadata:
+                      catalog_id: "restricted_catalog"
+                      required_role: "READER"
+
+    NotFound:
+      description: Resource not found (gRPC code 5 - NOT_FOUND)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Status'
+          examples:
+            catalogNotFound:
+              summary: Catalog not found
+              value:
+                code: 5
+                message: "Catalog not found"
+                details:
+                  - '@type': "type.googleapis.com/google.rpc.ResourceInfo"
+                    resource_type: "Catalog"
+                    resource_name: "nonexistent_catalog"
+                    owner: "ducklake-service"
+                    description: "The requested catalog does not exist"
+            branchNotFound:
+              summary: Branch not found
+              value:
+                code: 5
+                message: "Branch not found"
+                details:
+                  - '@type': "type.googleapis.com/google.rpc.ResourceInfo"
+                    resource_type: "Branch"
+                    resource_name: "feature_nonexistent"
+                    owner: "ducklake-service"
+                    description: "The requested branch does not exist"
+            tableNotFound:
+              summary: Table not found
+              value:
+                code: 5
+                message: "Table not found"
+                details:
+                  - '@type': "type.googleapis.com/google.rpc.ResourceInfo"
+                    resource_type: "Table"
+                    resource_name: "nonexistent_table"
+                    owner: "ducklake-service"
+                    description: "The requested table does not exist"
+
+    Conflict:
+      description: Resource conflict (gRPC code 6 - ALREADY_EXISTS)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Status'
+          examples:
+            branchAlreadyExists:
+              summary: Branch already exists
+              value:
+                code: 6
+                message: "Branch 'feature_analytics' already exists"
+                details:
+                  - '@type': "type.googleapis.com/google.rpc.ResourceInfo"
+                    resource_type: "Branch"
+                    resource_name: "feature_analytics"
+                    owner: "ducklake-service"
+                    description: "A branch with this name already exists"
+                  - '@type': "type.googleapis.com/google.rpc.ErrorInfo"
+                    reason: "BRANCH_ALREADY_EXISTS"
+                    domain: "ducklake.io"
+                    metadata:
+                      existing_branch_id: "3"
+            cannotDeleteMainBranch:
+              summary: Cannot delete main branch
+              value:
+                code: 9
+                message: "Cannot delete main branch"
+                details:
+                  - '@type': "type.googleapis.com/google.rpc.ErrorInfo"
+                    reason: "CANNOT_DELETE_MAIN_BRANCH"
+                    domain: "ducklake.io"
+            branchHasChildren:
+              summary: Branch has active children
+              value:
+                code: 9
+                message: "Cannot delete branch with active children"
+                details:
+                  - '@type': "type.googleapis.com/google.rpc.ErrorInfo"
+                    reason: "BRANCH_HAS_CHILDREN"
+                    domain: "ducklake.io"
+                    metadata:
+                      child_count: "3"
+
+    InternalServerError:
+      description: Internal server error (gRPC code 13 - INTERNAL)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Status'
+          examples:
+            internalError:
+              summary: Internal error
+              value:
+                code: 13
+                message: "Internal server error"
+                details:
+                  - '@type': "type.googleapis.com/google.rpc.ErrorInfo"
+                    reason: "INTERNAL_ERROR"
+                    domain: "ducklake.io"
+            metadataConnectionError:
+              summary: Metadata database connection error
+              value:
+                code: 14
+                message: "Unable to connect to metadata database"
+                details:
+                  - '@type': "type.googleapis.com/google.rpc.ErrorInfo"
+                    reason: "METADATA_CONNECTION_ERROR"
+                    domain: "ducklake.io"
+                    metadata:
+                      retry_after: "30"
+            storageError:
+              summary: Storage access error
+              value:
+                code: 13
+                message: "Unable to access data storage"
+                details:
+                  - '@type': "type.googleapis.com/google.rpc.ErrorInfo"
+                    reason: "STORAGE_ERROR"
+                    domain: "ducklake.io"

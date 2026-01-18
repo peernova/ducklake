@@ -1,0 +1,67 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: ducklake-service
+
+  datasource:
+    url: jdbc:postgresql://localhost:5433/ducklake_service
+    username: postgres
+    password: postgres
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+
+  jackson:
+    property-naming-strategy: SNAKE_CASE
+    serialization:
+      write-dates-as-timestamps: false
+    default-property-inclusion: non_null
+
+# DuckLake specific config
+ducklake:
+  duckdb:
+    extension-path: ${DUCKLAKE_EXTENSION_PATH:/Users/nareshbalusu/Downloads/claude/ducklake/ducklake_branching/ducklake/build/release/extension/ducklake/ducklake.duckdb_extension}
+    postgres-scanner-path: ${POSTGRES_SCANNER_PATH:/Users/nareshbalusu/Downloads/claude/ducklake/ducklake_branching/postgres_scanner/build/release/extension/postgres_scanner/postgres_scanner.duckdb_extension}
+    pool-size: 10
+    connection-timeout-ms: 5000
+    query-timeout-ms: 30000
+    temp-directory: /tmp/ducklake
+    threads: 4
+    memory-limit: 4GB
+
+# OpenAPI
+springdoc:
+  api-docs:
+    path: /api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    operationsSorter: method
+    tagsSorter: alpha
+    displayRequestDuration: true
+    tryItOutEnabled: true
+  show-actuator: false
+  default-produces-media-type: application/json
+  default-consumes-media-type: application/json
+
+logging:
+  level:
+    io.ducklake: DEBUG
+    org.springframework.web: INFO
+
+# Tracing - export to Jaeger via OTLP
+management:
+  tracing:
+    sampling:
+      probability: 1.0  # 100% sampling for dev
+  otlp:
+    tracing:
+      endpoint: http://localhost:4318/v1/traces

@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <linearGradient id="duckGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#f59e0b;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#d97706;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="lakeGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0ea5e9;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#0284c7;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+
+  <!-- Branch lines (git-style) -->
+  <!-- Main branch -->
+  <path d="M 15 85 L 15 50 L 15 20" stroke="url(#lakeGradient)" stroke-width="4" fill="none" stroke-linecap="round"/>
+
+  <!-- Branch 1 - curves right to duck -->
+  <path d="M 15 45 Q 30 45, 40 35" stroke="url(#lakeGradient)" stroke-width="3" fill="none" stroke-linecap="round"/>
+
+  <!-- Branch 2 - curves right further -->
+  <path d="M 15 60 Q 35 60, 55 50" stroke="url(#lakeGradient)" stroke-width="3" fill="none" stroke-linecap="round"/>
+
+  <!-- Branch commits (circles) -->
+  <circle cx="15" cy="20" r="5" fill="url(#lakeGradient)"/>
+  <circle cx="15" cy="45" r="4" fill="url(#lakeGradient)"/>
+  <circle cx="15" cy="60" r="4" fill="url(#lakeGradient)"/>
+  <circle cx="15" cy="85" r="5" fill="url(#lakeGradient)"/>
+
+  <!-- Branch endpoints -->
+  <circle cx="40" cy="35" r="4" fill="url(#lakeGradient)"/>
+  <circle cx="55" cy="50" r="4" fill="url(#lakeGradient)"/>
+
+  <!-- Duck body - positioned on the right -->
+  <ellipse cx="70" cy="55" rx="22" ry="16" fill="url(#duckGradient)"/>
+
+  <!-- Duck head -->
+  <circle cx="85" cy="40" r="12" fill="url(#duckGradient)"/>
+
+  <!-- Duck beak -->
+  <path d="M 94 42 L 100 40 L 94 38 Z" fill="#ea580c"/>
+
+  <!-- Duck eye -->
+  <circle cx="88" cy="37" r="2" fill="#1e293b"/>
+
+  <!-- Duck wing -->
+  <ellipse cx="65" cy="52" rx="10" ry="7" fill="#d97706"/>
+
+  <!-- Connection from branch to duck (data flow) -->
+  <path d="M 55 50 Q 58 52, 60 53" stroke="url(#lakeGradient)" stroke-width="2" fill="none" stroke-linecap="round" stroke-dasharray="2,2" opacity="0.6"/>
+</svg>

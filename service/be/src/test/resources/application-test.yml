@@ -1,0 +1,21 @@
+spring:
+  datasource:
+    # Will be overridden by Testcontainers
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: false
+
+# Disable tracing in tests
+management:
+  tracing:
+    enabled: false
+
+logging:
+  level:
+    io.ducklake: DEBUG
+    org.testcontainers: INFO
