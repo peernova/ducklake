@@ -11,139 +11,17 @@ import {
   Download,
   Copy,
   Check,
-  ChevronRight,
   ChevronDown,
-  Table,
-  FolderOpen,
-  Folder,
-  Type,
   PanelLeftClose,
   PanelLeft,
-  GitCompare,
   AlertTriangle,
   X,
-  Plus,
-  Minus,
   Search,
-  Filter,
-  RefreshCw,
-  Columns,
-  Rows,
 } from 'lucide-react';
-import type { QueryResponse, ColumnInfo } from '../types';
+import type { QueryResponse, ColumnInfo, Branch, Catalog } from '../types';
+import { SchemaTree, type SchemaTreeRef } from '../components/SchemaTree';
+import { catalogsApi, branchesApi } from '../api';
 
-// Schema browser types
-interface TableColumn {
-  name: string;
-  type: string;
-}
-
-interface TableDef {
-  name: string;
-  columns: TableColumn[];
-}
-
-interface SchemaDef {
-  name: string;
-  tables: TableDef[];
-}
-
-// Mock schema data - keyed by catalog:branch
-const mockSchemaData: Record<string, SchemaDef[]> = {
-  'xva_desk:main': [
-    {
-      name: 'main',
-      tables: [
-        { name: 'positions', columns: [
-          { name: 'trade_id', type: 'VARCHAR' },
-          { name: 'trade_date', type: 'DATE' },
-          { name: 'instrument', type: 'VARCHAR' },
-          { name: 'notional', type: 'DECIMAL(18,2)' },
-          { name: 'counterparty', type: 'VARCHAR' },
-        ]},
-        { name: 'trades', columns: [
-          { name: 'id', type: 'BIGINT' },
-          { name: 'trade_date', type: 'DATE' },
-          { name: 'product_type', type: 'VARCHAR' },
-          { name: 'quantity', type: 'INTEGER' },
-        ]},
-        { name: 'counterparties', columns: [
-          { name: 'id', type: 'BIGINT' },
-          { name: 'name', type: 'VARCHAR' },
-          { name: 'rating', type: 'VARCHAR' },
-        ]},
-      ],
-    },
-    {
-      name: 'staging',
-      tables: [
-        { name: 'audit_log', columns: [
-          { name: 'trade_id', type: 'VARCHAR' },
-          { name: 'status', type: 'VARCHAR' },
-          { name: 'updated_at', type: 'TIMESTAMP' },
-        ]},
-        { name: 'temp_imports', columns: [
-          { name: 'row_id', type: 'BIGINT' },
-          { name: 'data', type: 'JSON' },
-        ]},
-      ],
-    },
-  ],
-  'xva_desk:feature_new_model': [
-    {
-      name: 'main',
-      tables: [
-        { name: 'positions', columns: [
-          { name: 'trade_id', type: 'VARCHAR' },
-          { name: 'trade_date', type: 'DATE' },
-          { name: 'instrument', type: 'VARCHAR' },
-          { name: 'notional', type: 'DECIMAL(18,2)' },
-          { name: 'counterparty', type: 'VARCHAR' },
-          { name: 'model_version', type: 'VARCHAR' },  // New column in this branch
-        ]},
-        { name: 'trades', columns: [
-          { name: 'id', type: 'BIGINT' },
-          { name: 'trade_date', type: 'DATE' },
-          { name: 'product_type', type: 'VARCHAR' },
-          { name: 'quantity', type: 'INTEGER' },
-        ]},
-        { name: 'model_params', columns: [  // New table in this branch
-          { name: 'param_id', type: 'BIGINT' },
-          { name: 'param_name', type: 'VARCHAR' },
-          { name: 'param_value', type: 'DOUBLE' },
-        ]},
-      ],
-    },
-    {
-      name: 'staging',
-      tables: [
-        { name: 'audit_log', columns: [
-          { name: 'trade_id', type: 'VARCHAR' },
-          { name: 'status', type: 'VARCHAR' },
-          { name: 'updated_at', type: 'TIMESTAMP' },
-        ]},
-      ],
-    },
-  ],
-  'market_data:main': [
-    {
-      name: 'main',
-      tables: [
-        { name: 'prices', columns: [
-          { name: 'instrument_id', type: 'VARCHAR' },
-          { name: 'price_date', type: 'DATE' },
-          { name: 'price', type: 'DECIMAL(18,6)' },
-          { name: 'currency', type: 'VARCHAR' },
-        ]},
-        { name: 'instruments', columns: [
-          { name: 'id', type: 'VARCHAR' },
-          { name: 'name', type: 'VARCHAR' },
-          { name: 'asset_class', type: 'VARCHAR' },
-        ]},
-      ],
-    },
-  ],
-};
 
 // Mock query execution
 function mockExecuteQuery(sql: string): Promise<QueryResponse> {
@@ -252,6 +130,7 @@ LIMIT 100;`;
 export default function Query() {
   const editorRef = useRef<any>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const schemaTreeRef = useRef<SchemaTreeRef>(null);
   const [hasSelection, setHasSelection] = useState(false);
   const [query, setQuery] = useState(defaultQuery);
   const [editorHeight, setEditorHeight] = useState(280);
@@ -259,240 +138,130 @@ export default function Query() {
   const [executing, setExecuting] = useState(false);
   const [result, setResult] = useState<QueryResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [selectedCatalog, setSelectedCatalog] = useState('xva_desk');
+  const [selectedCatalog, setSelectedCatalog] = useState('');
   const [selectedBranch, setSelectedBranch] = useState('main');
   const [useCatalogContext, setUseCatalogContext] = useState(true);
   const [selectedSchema, setSelectedSchema] = useState('main');
 
   // Schema browser state - independent from query context
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [browserCatalog, setBrowserCatalog] = useState('xva_desk');
+  const [sidebarWidth, setSidebarWidth] = useState(280);
+  const [isResizingSidebar, setIsResizingSidebar] = useState(false);
+  const [browserCatalog, setBrowserCatalog] = useState('');
   const [browserBranch, setBrowserBranch] = useState('main');
-  const [expandedSchemas, setExpandedSchemas] = useState<Set<string>>(new Set(['main']));
-  const [expandedTables, setExpandedTables] = useState<Set<string>>(new Set());
 
-  // Compare mode state
-  const [showCompareModal, setShowCompareModal] = useState(false);
-  const [compareCatalog1, setCompareCatalog1] = useState('xva_desk');
-  const [compareBranch1, setCompareBranch1] = useState('main');
-  const [compareCatalog2, setCompareCatalog2] = useState('xva_desk');
-  const [compareBranch2, setCompareBranch2] = useState('feature_new_model');
-  const [compareSearch, setCompareSearch] = useState('');
-  const [compareFilterLevel, setCompareFilterLevel] = useState<'all' | 'schemas' | 'tables' | 'columns'>('all');
-  const [compareShowOnlyDiffs, setCompareShowOnlyDiffs] = useState(false);
-  const [compareSplitView, setCompareSplitView] = useState(true);
-  const [compareExpandedSchemas, setCompareExpandedSchemas] = useState<Set<string>>(new Set());
-  const [compareExpandedTables, setCompareExpandedTables] = useState<Set<string>>(new Set());
+  // Real data from API
+  const [catalogs, setCatalogs] = useState<Catalog[]>([]);
+  const [branches, setBranches] = useState<Branch[]>([]);
+  const [catalogsLoading, setCatalogsLoading] = useState(true);
+  const [branchesLoading, setBranchesLoading] = useState(false);
 
-  // Get schemas for compare mode (needed for computeDiff)
-  const compareKey1 = `${compareCatalog1}:${compareBranch1}`;
-  const compareKey2 = `${compareCatalog2}:${compareBranch2}`;
-  const compareSchemas1 = mockSchemaData[compareKey1] || mockSchemaData[`${compareCatalog1}:main`] || [];
-  const compareSchemas2 = mockSchemaData[compareKey2] || mockSchemaData[`${compareCatalog2}:main`] || [];
+  // Branch dropdown state
+  const [branchDropdownOpen, setBranchDropdownOpen] = useState(false);
+  const [branchSearch, setBranchSearch] = useState('');
+  const branchDropdownRef = useRef<HTMLDivElement>(null);
 
-  // Compute unified diff structure
-  const computeDiff = () => {
-    const allSchemaNames = new Set([
-      ...compareSchemas1.map(s => s.name),
-      ...compareSchemas2.map(s => s.name),
-    ]);
-
-    const diff: Array<{
-      schemaName: string;
-      status: 'same' | 'left-only' | 'right-only' | 'modified';
-      tables: Array<{
-        tableName: string;
-        status: 'same' | 'left-only' | 'right-only' | 'modified';
-        leftCols: TableColumn[];
-        rightCols: TableColumn[];
-        columns: Array<{
-          colName: string;
-          colType: string;
-          status: 'same' | 'left-only' | 'right-only' | 'type-changed';
-          leftType?: string;
-          rightType?: string;
-        }>;
-      }>;
-    }> = [];
-
-    allSchemaNames.forEach(schemaName => {
-      const schema1 = compareSchemas1.find(s => s.name === schemaName);
-      const schema2 = compareSchemas2.find(s => s.name === schemaName);
-
-      const schemaStatus = !schema1 ? 'right-only' : !schema2 ? 'left-only' : 'same';
-
-      const allTableNames = new Set([
-        ...(schema1?.tables.map(t => t.name) || []),
-        ...(schema2?.tables.map(t => t.name) || []),
-      ]);
-
-      const tables: typeof diff[0]['tables'] = [];
-      let hasTableDiff = false;
-
-      allTableNames.forEach(tableName => {
-        const table1 = schema1?.tables.find(t => t.name === tableName);
-        const table2 = schema2?.tables.find(t => t.name === tableName);
-
-        const allColNames = new Set([
-          ...(table1?.columns.map(c => c.name) || []),
-          ...(table2?.columns.map(c => c.name) || []),
-        ]);
-
-        const columns: typeof tables[0]['columns'] = [];
-        let hasColDiff = false;
-
-        allColNames.forEach(colName => {
-          const col1 = table1?.columns.find(c => c.name === colName);
-          const col2 = table2?.columns.find(c => c.name === colName);
-
-          let colStatus: 'same' | 'left-only' | 'right-only' | 'type-changed' = 'same';
-          if (!col1) colStatus = 'right-only';
-          else if (!col2) colStatus = 'left-only';
-          else if (col1.type !== col2.type) colStatus = 'type-changed';
-
-          if (colStatus !== 'same') hasColDiff = true;
-
-          columns.push({
-            colName,
-            colType: col1?.type || col2?.type || '',
-            status: colStatus,
-            leftType: col1?.type,
-            rightType: col2?.type,
-          });
-        });
-
-        let tableStatus: 'same' | 'left-only' | 'right-only' | 'modified' = 'same';
-        if (!table1) tableStatus = 'right-only';
-        else if (!table2) tableStatus = 'left-only';
-        else if (hasColDiff) tableStatus = 'modified';
-
-        if (tableStatus !== 'same') hasTableDiff = true;
-
-        tables.push({
-          tableName,
-          status: tableStatus,
-          leftCols: table1?.columns || [],
-          rightCols: table2?.columns || [],
-          columns: columns.sort((a, b) => a.colName.localeCompare(b.colName)),
-        });
-      });
-
-      diff.push({
-        schemaName,
-        status: schemaStatus === 'same' && hasTableDiff ? 'modified' : schemaStatus,
-        tables: tables.sort((a, b) => a.tableName.localeCompare(b.tableName)),
-      });
-    });
-
-    return diff.sort((a, b) => a.schemaName.localeCompare(b.schemaName));
-  };
-
-  const diffData = showCompareModal ? computeDiff() : [];
-
-  // Filter diff based on search and level
-  const filteredDiff = diffData.filter(schema => {
-    const searchLower = compareSearch.toLowerCase();
-    if (!searchLower) {
-      return compareShowOnlyDiffs ? schema.status !== 'same' : true;
-    }
-
-    if (compareFilterLevel === 'schemas' || compareFilterLevel === 'all') {
-      if (schema.schemaName.toLowerCase().includes(searchLower)) {
-        return compareShowOnlyDiffs ? schema.status !== 'same' : true;
+  // Load catalogs on mount
+  useEffect(() => {
+    const loadCatalogs = async () => {
+      try {
+        const data = await catalogsApi.list();
+        const catalogList = Array.isArray(data) ? data : (data as { catalogs: Catalog[] }).catalogs || [];
+        setCatalogs(catalogList);
+        if (catalogList.length > 0) {
+          const firstCatalog = catalogList[0].catalog_id;
+          setSelectedCatalog(firstCatalog);
+          setBrowserCatalog(firstCatalog);
+        }
+      } catch (err) {
+        console.error('Failed to load catalogs:', err);
+      } finally {
+        setCatalogsLoading(false);
       }
-    }
-    if (compareFilterLevel === 'tables' || compareFilterLevel === 'all') {
-      if (schema.tables.some(t => t.tableName.toLowerCase().includes(searchLower))) {
-        return true;
-      }
-    }
-    if (compareFilterLevel === 'columns' || compareFilterLevel === 'all') {
-      if (schema.tables.some(t => t.columns.some(c => c.colName.toLowerCase().includes(searchLower)))) {
-        return true;
-      }
-    }
-    return false;
-  }).map(schema => {
-    if (!compareSearch) return schema;
-    const searchLower = compareSearch.toLowerCase();
+    };
+    loadCatalogs();
+  }, []);
 
-    // Filter tables based on search
-    const filteredTables = schema.tables.filter(table => {
-      if (compareFilterLevel === 'schemas') return true;
-      if (compareFilterLevel === 'tables' || compareFilterLevel === 'all') {
-        if (table.tableName.toLowerCase().includes(searchLower)) return true;
+  // Load branches when catalog changes
+  useEffect(() => {
+    if (!browserCatalog) return;
+    const loadBranches = async () => {
+      setBranchesLoading(true);
+      try {
+        const data = await branchesApi.list(browserCatalog);
+        const branchList = Array.isArray(data) ? data : (data as { branches: Branch[] }).branches || [];
+        setBranches(branchList);
+        // Set default branch to main if exists, otherwise first branch
+        const mainBranch = branchList.find(b => b.branch_name === 'main');
+        const defaultBranch = mainBranch?.branch_name || branchList[0]?.branch_name || 'main';
+        setBrowserBranch(defaultBranch);
+        if (!selectedBranch || selectedBranch === 'main') {
+          setSelectedBranch(defaultBranch);
+        }
+      } catch (err) {
+        console.error('Failed to load branches:', err);
+      } finally {
+        setBranchesLoading(false);
       }
-      if (compareFilterLevel === 'columns' || compareFilterLevel === 'all') {
-        if (table.columns.some(c => c.colName.toLowerCase().includes(searchLower))) return true;
-      }
-      return false;
-    });
+    };
+    loadBranches();
+  }, [browserCatalog]);
 
-    return { ...schema, tables: filteredTables };
-  });
+  // Close branch dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (branchDropdownRef.current && !branchDropdownRef.current.contains(e.target as Node)) {
+        setBranchDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // Sidebar resize - using refs to avoid closure issues
+  const isResizingRef = useRef(false);
+
+  const handleSidebarMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    isResizingRef.current = true;
+    setIsResizingSidebar(true);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      if (!isResizingRef.current) return;
+      const newWidth = Math.min(500, Math.max(200, moveEvent.clientX));
+      setSidebarWidth(newWidth);
+    };
+
+    const handleMouseUp = () => {
+      isResizingRef.current = false;
+      setIsResizingSidebar(false);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+  }, []);
+
+  // Filter active branches for dropdown
+  const activeBranches = branches.filter(b => b.status === 'active');
+  const filteredBranches = activeBranches.filter(b =>
+    b.branch_name.toLowerCase().includes(branchSearch.toLowerCase())
+  );
 
   // Check if browser context differs from query context
   const contextMismatch = useCatalogContext && (
     browserCatalog !== selectedCatalog || browserBranch !== selectedBranch
   );
 
-  // Get schemas for browser's catalog:branch
-  const browserKey = `${browserCatalog}:${browserBranch}`;
-  const schemas = mockSchemaData[browserKey] || mockSchemaData[`${browserCatalog}:main`] || [];
-
   // Sync browser to query context
   const syncBrowserToQuery = () => {
     setBrowserCatalog(selectedCatalog);
     setBrowserBranch(selectedBranch);
-  };
-
-  const toggleSchema = (schemaName: string) => {
-    setExpandedSchemas(prev => {
-      const next = new Set(prev);
-      if (next.has(schemaName)) {
-        next.delete(schemaName);
-      } else {
-        next.add(schemaName);
-      }
-      return next;
-    });
-  };
-
-  const toggleTable = (tableKey: string) => {
-    setExpandedTables(prev => {
-      const next = new Set(prev);
-      if (next.has(tableKey)) {
-        next.delete(tableKey);
-      } else {
-        next.add(tableKey);
-      }
-      return next;
-    });
-  };
-
-  // Compare modal toggle functions
-  const toggleCompareSchema = (schemaName: string) => {
-    setCompareExpandedSchemas(prev => {
-      const next = new Set(prev);
-      if (next.has(schemaName)) {
-        next.delete(schemaName);
-      } else {
-        next.add(schemaName);
-      }
-      return next;
-    });
-  };
-
-  const toggleCompareTable = (tableKey: string) => {
-    setCompareExpandedTables(prev => {
-      const next = new Set(prev);
-      if (next.has(tableKey)) {
-        next.delete(tableKey);
-      } else {
-        next.add(tableKey);
-      }
-      return next;
-    });
   };
 
   const insertText = (text: string) => {
@@ -662,51 +431,8 @@ export default function Query() {
           });
         });
 
-        // Add tables and columns from current schema
-        const browserKey = `${browserCatalog}:${browserBranch}`;
-        const currentSchemas = mockSchemaData[browserKey] || mockSchemaData[`${browserCatalog}:main`] || [];
-
-        currentSchemas.forEach(schema => {
-          // Add schema name
-          suggestions.push({
-            label: schema.name,
-            kind: monaco.languages.CompletionItemKind.Module,
-            insertText: schema.name,
-            detail: `Schema (${schema.tables.length} tables)`,
-            range,
-          });
-
-          schema.tables.forEach(table => {
-            // Add table name
-            suggestions.push({
-              label: table.name,
-              kind: monaco.languages.CompletionItemKind.Class,
-              insertText: table.name,
-              detail: `Table in ${schema.name} (${table.columns.length} columns)`,
-              range,
-            });
-
-            // Add fully qualified table name
-            suggestions.push({
-              label: `${schema.name}.${table.name}`,
-              kind: monaco.languages.CompletionItemKind.Class,
-              insertText: `${schema.name}.${table.name}`,
-              detail: `${table.columns.length} columns`,
-              range,
-            });
-
-            // Add columns
-            table.columns.forEach(col => {
-              suggestions.push({
-                label: col.name,
-                kind: monaco.languages.CompletionItemKind.Field,
-                insertText: col.name,
-                detail: `${col.type} (${table.name})`,
-                range,
-              });
-            });
-          });
-        });
+        // Note: Schema/table/column suggestions can be added via a backend API
+        // For now, use the Schema Browser sidebar to click-to-insert
 
         return { suggestions };
       },
@@ -847,20 +573,33 @@ export default function Query() {
     URL.revokeObjectURL(url);
   };
 
+  // Handle table/column selection from SchemaTree for insertion
+  const handleSelectTable = useCallback((schemaName: string, tableName: string) => {
+    const text = schemaName === selectedSchema ? tableName : `${schemaName}.${tableName}`;
+    insertText(text);
+  }, [selectedSchema, insertText]);
+
+  const handleSelectColumn = useCallback((_schemaName: string, _tableName: string, columnName: string) => {
+    insertText(columnName);
+  }, [insertText]);
+
   return (
-    <div className="query-container" onKeyDown={handleKeyDown}>
+    <div
+      className="query-container"
+      onKeyDown={handleKeyDown}
+      style={{ cursor: isResizingSidebar ? 'col-resize' : undefined }}
+    >
       {/* Schema Browser Sidebar */}
       <div
         className="schema-browser"
         style={{
-          width: sidebarOpen ? '260px' : '40px',
-          minWidth: sidebarOpen ? '260px' : '40px',
+          width: sidebarOpen ? `${sidebarWidth}px` : '40px',
+          minWidth: sidebarOpen ? '200px' : '40px',
           background: 'var(--bg-secondary)',
-          borderRight: '1px solid var(--border-light)',
           display: 'flex',
           flexDirection: 'column',
-          transition: 'all var(--transition-fast)',
           overflow: 'hidden',
+          flexShrink: 0,
         }}
       >
         <div
@@ -889,40 +628,170 @@ export default function Query() {
 
         {sidebarOpen && (
           <>
-            {/* Browser's own catalog/branch selectors */}
+            {/* Catalog selector */}
             <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-light)' }}>
-              <div style={{ display: 'flex', gap: '6px', marginBottom: '6px' }}>
-                <select
-                  className="form-input form-select"
-                  style={{ flex: 1, padding: '4px 8px', fontSize: '12px' }}
-                  value={browserCatalog}
-                  onChange={(e) => setBrowserCatalog(e.target.value)}
+              <label style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600, marginBottom: '4px', display: 'block' }}>
+                Catalog
+              </label>
+              <select
+                className="form-input form-select"
+                style={{ width: '100%', padding: '6px 10px', fontSize: '12px' }}
+                value={browserCatalog}
+                onChange={(e) => setBrowserCatalog(e.target.value)}
+                disabled={catalogsLoading}
+              >
+                {catalogsLoading ? (
+                  <option>Loading...</option>
+                ) : catalogs.length === 0 ? (
+                  <option>No catalogs</option>
+                ) : (
+                  catalogs.map(c => (
+                    <option key={c.catalog_id} value={c.catalog_id}>
+                      {c.display_name || c.catalog_id}
+                    </option>
+                  ))
+                )}
+              </select>
+            </div>
+
+            {/* Searchable branch selector */}
+            <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-light)' }}>
+              <label style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600, marginBottom: '4px', display: 'block' }}>
+                Branch
+              </label>
+              <div ref={branchDropdownRef} style={{ position: 'relative' }}>
+                <div
+                  onClick={() => setBranchDropdownOpen(!branchDropdownOpen)}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    padding: '6px 10px',
+                    background: 'var(--bg-primary)',
+                    border: '1px solid var(--border-color)',
+                    borderRadius: '6px',
+                    cursor: branchesLoading ? 'wait' : 'pointer',
+                    transition: 'border-color 0.15s ease',
+                  }}
+                  onMouseEnter={(e) => e.currentTarget.style.borderColor = 'var(--accent-primary)'}
+                  onMouseLeave={(e) => e.currentTarget.style.borderColor = 'var(--border-color)'}
                 >
-                  <option value="xva_desk">xva_desk</option>
-                  <option value="market_data">market_data</option>
-                  <option value="analytics">analytics</option>
-                </select>
-              </div>
-              <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                <GitBranch size={12} className="text-muted" />
-                <select
-                  className="form-input form-select"
-                  style={{ flex: 1, padding: '4px 8px', fontSize: '12px' }}
-                  value={browserBranch}
-                  onChange={(e) => setBrowserBranch(e.target.value)}
-                >
-                  <option value="main">main</option>
-                  <option value="feature_new_model">feature_new_model</option>
-                  <option value="hotfix_pricing">hotfix_pricing</option>
-                </select>
-                <button
-                  className="btn btn-ghost btn-icon btn-sm"
-                  onClick={() => setShowCompareModal(true)}
-                  title="Compare branches"
-                  style={{ padding: '4px' }}
-                >
-                  <GitCompare size={14} />
-                </button>
+                  <GitBranch size={14} style={{ color: 'var(--accent-primary)', flexShrink: 0 }} />
+                  <span style={{ flex: 1, fontSize: '12px', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {branchesLoading ? 'Loading...' : browserBranch}
+                  </span>
+                  <ChevronDown size={14} style={{ color: 'var(--text-muted)', flexShrink: 0, transform: branchDropdownOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s ease' }} />
+                </div>
+
+                {/* Dropdown */}
+                {branchDropdownOpen && !branchesLoading && (
+                  <div style={{
+                    position: 'absolute',
+                    top: '100%',
+                    left: 0,
+                    right: 0,
+                    marginTop: '4px',
+                    background: 'var(--bg-primary)',
+                    border: '1px solid var(--border-color)',
+                    borderRadius: '6px',
+                    boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                    zIndex: 100,
+                    maxHeight: '280px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                  }}>
+                    {/* Search input */}
+                    <div style={{ padding: '8px', borderBottom: '1px solid var(--border-color)' }}>
+                      <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        padding: '6px 8px',
+                        background: 'var(--bg-secondary)',
+                        borderRadius: '4px',
+                      }}>
+                        <Search size={12} style={{ color: 'var(--text-muted)' }} />
+                        <input
+                          type="text"
+                          placeholder="Search branches..."
+                          value={branchSearch}
+                          onChange={(e) => setBranchSearch(e.target.value)}
+                          onClick={(e) => e.stopPropagation()}
+                          autoFocus
+                          style={{
+                            flex: 1,
+                            background: 'transparent',
+                            border: 'none',
+                            outline: 'none',
+                            color: 'var(--text-primary)',
+                            fontSize: '12px',
+                          }}
+                        />
+                        {branchSearch && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); setBranchSearch(''); }}
+                            style={{ background: 'none', border: 'none', padding: '2px', cursor: 'pointer', color: 'var(--text-muted)' }}
+                          >
+                            <X size={10} />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Branch list */}
+                    <div style={{ overflowY: 'auto', flex: 1 }}>
+                      {filteredBranches.length === 0 ? (
+                        <div style={{ padding: '12px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '12px' }}>
+                          No branches found
+                        </div>
+                      ) : (
+                        filteredBranches.map(b => (
+                          <div
+                            key={b.branch_id}
+                            onClick={() => {
+                              setBrowserBranch(b.branch_name);
+                              setBranchDropdownOpen(false);
+                              setBranchSearch('');
+                            }}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '8px',
+                              padding: '8px 12px',
+                              cursor: 'pointer',
+                              fontSize: '12px',
+                              background: b.branch_name === browserBranch ? 'var(--accent-secondary)' : 'transparent',
+                              borderLeft: b.branch_name === browserBranch ? '2px solid var(--accent-primary)' : '2px solid transparent',
+                            }}
+                            onMouseEnter={(e) => {
+                              if (b.branch_name !== browserBranch) e.currentTarget.style.background = 'var(--bg-secondary)';
+                            }}
+                            onMouseLeave={(e) => {
+                              if (b.branch_name !== browserBranch) e.currentTarget.style.background = 'transparent';
+                            }}
+                          >
+                            <GitBranch size={12} style={{ color: b.branch_name === 'main' ? 'var(--accent-primary)' : 'var(--text-muted)' }} />
+                            <span style={{ flex: 1, fontWeight: b.branch_name === browserBranch ? 500 : 400 }}>{b.branch_name}</span>
+                            {b.branch_name === browserBranch && (
+                              <span style={{ fontSize: '10px', color: 'var(--accent-primary)' }}>current</span>
+                            )}
+                          </div>
+                        ))
+                      )}
+                    </div>
+
+                    {/* Footer with count */}
+                    <div style={{
+                      padding: '6px 12px',
+                      borderTop: '1px solid var(--border-color)',
+                      background: 'var(--bg-secondary)',
+                      fontSize: '10px',
+                      color: 'var(--text-muted)',
+                    }}>
+                      {filteredBranches.length} of {activeBranches.length} branches
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -959,127 +828,59 @@ export default function Query() {
               </div>
             )}
 
-            <div style={{ flex: 1, overflow: 'auto', padding: '8px 0' }}>
-              {schemas.length === 0 ? (
-                <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>
-                  No schemas found
-                </div>
+            {/* SchemaTree - with click to insert */}
+            <div style={{ flex: 1, overflow: 'hidden' }}>
+              {browserCatalog ? (
+                <SchemaTree
+                  ref={schemaTreeRef}
+                  catalogId={browserCatalog}
+                  branch={browserBranch}
+                  height={500}
+                  onSelectTable={handleSelectTable}
+                  onSelectColumn={handleSelectColumn}
+                />
               ) : (
-                schemas.map((schema) => (
-                  <div key={schema.name}>
-                    {/* Schema row */}
-                    <div
-                      onClick={() => toggleSchema(schema.name)}
-                      style={{
-                        padding: '6px 12px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '6px',
-                        cursor: 'pointer',
-                        fontSize: '13px',
-                        fontWeight: 500,
-                        background: schema.name === selectedSchema ? 'rgba(14, 165, 233, 0.08)' : 'transparent',
-                      }}
-                      className="hover-bg"
-                    >
-                      {expandedSchemas.has(schema.name) ? (
-                        <ChevronDown size={14} className="text-muted" />
-                      ) : (
-                        <ChevronRight size={14} className="text-muted" />
-                      )}
-                      {expandedSchemas.has(schema.name) ? (
-                        <FolderOpen size={14} style={{ color: 'var(--accent-primary)' }} />
-                      ) : (
-                        <Folder size={14} style={{ color: 'var(--accent-primary)' }} />
-                      )}
-                      <span>{schema.name}</span>
-                      <span style={{ marginLeft: 'auto', fontSize: '11px', color: 'var(--text-muted)' }}>
-                        {schema.tables.length}
-                      </span>
-                    </div>
-
-                    {/* Tables */}
-                    {expandedSchemas.has(schema.name) && (
-                      <div style={{ marginLeft: '12px' }}>
-                        {schema.tables.map((table) => {
-                          const tableKey = `${schema.name}.${table.name}`;
-                          const isExpanded = expandedTables.has(tableKey);
-                          return (
-                            <div key={table.name}>
-                              {/* Table row */}
-                              <div
-                                style={{
-                                  padding: '4px 12px',
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  gap: '6px',
-                                  cursor: 'pointer',
-                                  fontSize: '12px',
-                                }}
-                                className="hover-bg"
-                              >
-                                <span
-                                  onClick={() => toggleTable(tableKey)}
-                                  style={{ display: 'flex', alignItems: 'center' }}
-                                >
-                                  {isExpanded ? (
-                                    <ChevronDown size={12} className="text-muted" />
-                                  ) : (
-                                    <ChevronRight size={12} className="text-muted" />
-                                  )}
-                                </span>
-                                <Table size={13} style={{ color: 'var(--accent-secondary)' }} />
-                                <span
-                                  onClick={() => insertText(schema.name === selectedSchema ? table.name : `${schema.name}.${table.name}`)}
-                                  style={{ cursor: 'pointer' }}
-                                  title="Click to insert table name"
-                                >
-                                  {table.name}
-                                </span>
-                                <span style={{ marginLeft: 'auto', fontSize: '10px', color: 'var(--text-muted)' }}>
-                                  {table.columns.length} cols
-                                </span>
-                              </div>
-
-                              {/* Columns */}
-                              {isExpanded && (
-                                <div style={{ marginLeft: '24px' }}>
-                                  {table.columns.map((col) => (
-                                    <div
-                                      key={col.name}
-                                      onClick={() => insertText(col.name)}
-                                      style={{
-                                        padding: '3px 12px',
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        gap: '6px',
-                                        cursor: 'pointer',
-                                        fontSize: '11px',
-                                      }}
-                                      className="hover-bg"
-                                      title="Click to insert column name"
-                                    >
-                                      <Type size={11} className="text-muted" />
-                                      <span style={{ color: 'var(--text-secondary)' }}>{col.name}</span>
-                                      <span style={{ marginLeft: 'auto', fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'monospace' }}>
-                                        {col.type}
-                                      </span>
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                ))
+                <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '12px' }}>
+                  Select a catalog to browse schemas
+                </div>
               )}
             </div>
           </>
         )}
+
       </div>
+
+      {/* Draggable Divider - outside sidebar for better event handling */}
+      {sidebarOpen && (
+        <div
+          onMouseDown={handleSidebarMouseDown}
+          className="sidebar-divider"
+          style={{
+            width: '6px',
+            cursor: 'col-resize',
+            background: isResizingSidebar ? 'var(--accent-primary)' : 'var(--border-light)',
+            flexShrink: 0,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            transition: isResizingSidebar ? 'none' : 'background 0.15s ease',
+          }}
+          onMouseEnter={(e) => {
+            if (!isResizingSidebar) e.currentTarget.style.background = 'var(--accent-secondary)';
+          }}
+          onMouseLeave={(e) => {
+            if (!isResizingSidebar) e.currentTarget.style.background = 'var(--border-light)';
+          }}
+        >
+          <div style={{
+            width: '2px',
+            height: '40px',
+            background: isResizingSidebar ? '#fff' : 'var(--text-muted)',
+            borderRadius: '2px',
+            opacity: 0.6,
+          }} />
+        </div>
+      )}
 
       {/* Main Query Area */}
       <div ref={containerRef} style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
@@ -1131,11 +932,13 @@ export default function Query() {
                 style={{ width: '140px', padding: '6px 12px' }}
                 value={selectedCatalog}
                 onChange={(e) => setSelectedCatalog(e.target.value)}
-                disabled={!useCatalogContext}
+                disabled={!useCatalogContext || catalogsLoading}
               >
-                <option value="xva_desk">xva_desk</option>
-                <option value="market_data">market_data</option>
-                <option value="analytics">analytics</option>
+                {catalogs.map(c => (
+                  <option key={c.catalog_id} value={c.catalog_id}>
+                    {c.display_name || c.catalog_id}
+                  </option>
+                ))}
               </select>
             </div>
 
@@ -1162,11 +965,13 @@ export default function Query() {
                 style={{ width: '150px', padding: '6px 12px' }}
                 value={selectedBranch}
                 onChange={(e) => setSelectedBranch(e.target.value)}
-                disabled={!useCatalogContext}
+                disabled={!useCatalogContext || branchesLoading}
               >
-                <option value="main">main</option>
-                <option value="feature_new_model">feature_new_model</option>
-                <option value="hotfix_pricing">hotfix_pricing</option>
+                {activeBranches.map(b => (
+                  <option key={b.branch_id} value={b.branch_name}>
+                    {b.branch_name}
+                  </option>
+                ))}
               </select>
             </div>
 
@@ -1329,555 +1134,6 @@ export default function Query() {
         </div>
       </div>
       </div> {/* End Main Query Area */}
-
-      {/* Compare Modal */}
-      {showCompareModal && (
-        <div className="modal-overlay" onClick={() => setShowCompareModal(false)}>
-          <div className="modal modal-lg" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '950px', height: '85vh' }}>
-            <div className="modal-header" style={{ padding: '16px 20px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                <GitCompare size={20} />
-                <h3 className="modal-title">Compare Schemas</h3>
-              </div>
-              <button className="modal-close" onClick={() => setShowCompareModal(false)}>
-                <X size={20} />
-              </button>
-            </div>
-
-            {/* Compare Header - Source Selection */}
-            <div style={{ padding: '12px 20px', background: 'var(--bg-tertiary)', borderBottom: '1px solid var(--border-light)', display: 'flex', gap: '24px', alignItems: 'center' }}>
-              {/* Left Source */}
-              <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <span style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>Base</span>
-                <select
-                  className="form-input form-select"
-                  style={{ width: '120px', padding: '5px 8px', fontSize: '12px' }}
-                  value={compareCatalog1}
-                  onChange={(e) => setCompareCatalog1(e.target.value)}
-                >
-                  <option value="xva_desk">xva_desk</option>
-                  <option value="market_data">market_data</option>
-                </select>
-                <GitBranch size={14} className="text-muted" />
-                <select
-                  className="form-input form-select"
-                  style={{ width: '140px', padding: '5px 8px', fontSize: '12px' }}
-                  value={compareBranch1}
-                  onChange={(e) => setCompareBranch1(e.target.value)}
-                >
-                  <option value="main">main</option>
-                  <option value="feature_new_model">feature_new_model</option>
-                  <option value="hotfix_pricing">hotfix_pricing</option>
-                </select>
-              </div>
-
-              <RefreshCw size={16} className="text-muted" />
-
-              {/* Right Source */}
-              <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <span style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>Compare</span>
-                <select
-                  className="form-input form-select"
-                  style={{ width: '120px', padding: '5px 8px', fontSize: '12px' }}
-                  value={compareCatalog2}
-                  onChange={(e) => setCompareCatalog2(e.target.value)}
-                >
-                  <option value="xva_desk">xva_desk</option>
-                  <option value="market_data">market_data</option>
-                </select>
-                <GitBranch size={14} className="text-muted" />
-                <select
-                  className="form-input form-select"
-                  style={{ width: '140px', padding: '5px 8px', fontSize: '12px' }}
-                  value={compareBranch2}
-                  onChange={(e) => setCompareBranch2(e.target.value)}
-                >
-                  <option value="main">main</option>
-                  <option value="feature_new_model">feature_new_model</option>
-                  <option value="hotfix_pricing">hotfix_pricing</option>
-                </select>
-              </div>
-            </div>
-
-            {/* Search & Filter Bar */}
-            <div style={{ padding: '12px 20px', borderBottom: '1px solid var(--border-light)', display: 'flex', gap: '12px', alignItems: 'center' }}>
-              <div style={{ flex: 1, position: 'relative' }}>
-                <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-                <input
-                  type="text"
-                  className="form-input"
-                  placeholder="Search schemas, tables, or columns..."
-                  style={{ paddingLeft: '32px', fontSize: '13px' }}
-                  value={compareSearch}
-                  onChange={(e) => setCompareSearch(e.target.value)}
-                />
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <Filter size={14} className="text-muted" />
-                <select
-                  className="form-input form-select"
-                  style={{ width: '100px', padding: '6px 8px', fontSize: '12px' }}
-                  value={compareFilterLevel}
-                  onChange={(e) => setCompareFilterLevel(e.target.value as typeof compareFilterLevel)}
-                >
-                  <option value="all">All</option>
-                  <option value="schemas">Schemas</option>
-                  <option value="tables">Tables</option>
-                  <option value="columns">Columns</option>
-                </select>
-              </div>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '12px', color: 'var(--text-secondary)' }}>
-                <input
-                  type="checkbox"
-                  checked={compareShowOnlyDiffs}
-                  onChange={(e) => setCompareShowOnlyDiffs(e.target.checked)}
-                />
-                Only differences
-              </label>
-              <div style={{ borderLeft: '1px solid var(--border-light)', height: '20px', margin: '0 4px' }} />
-              <button
-                className={`btn btn-sm ${compareSplitView ? 'btn-primary' : 'btn-ghost'}`}
-                onClick={() => setCompareSplitView(!compareSplitView)}
-                title={compareSplitView ? 'Unified view' : 'Split view'}
-                style={{ padding: '4px 8px', display: 'flex', alignItems: 'center', gap: '4px' }}
-              >
-                {compareSplitView ? <Rows size={14} /> : <Columns size={14} />}
-                <span style={{ fontSize: '11px' }}>{compareSplitView ? 'Unified' : 'Split'}</span>
-              </button>
-            </div>
-
-            {/* Diff Legend */}
-            <div style={{ padding: '8px 20px', borderBottom: '1px solid var(--border-light)', display: 'flex', gap: '20px', fontSize: '12px' }}>
-              <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <span style={{ color: 'var(--error)', fontWeight: 700 }}>−</span>
-                <span>Only in Base</span>
-              </span>
-              <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <span style={{ color: 'var(--success)', fontWeight: 700 }}>+</span>
-                <span>Only in Compare</span>
-              </span>
-              <span style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '2px 8px', background: 'var(--warning-bg)', borderRadius: '4px' }}>
-                <AlertTriangle size={12} style={{ color: 'var(--warning)' }} />
-                <span>Modified</span>
-              </span>
-            </div>
-
-            {/* Hierarchical Diff View */}
-            <div style={{ flex: 1, overflow: 'auto', padding: '12px 20px' }}>
-              {filteredDiff.length === 0 ? (
-                <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>
-                  {compareSearch ? 'No results found' : 'Select sources to compare'}
-                </div>
-              ) : compareSplitView ? (
-                /* Split View - Side by Side with Diff Indicators */
-                (() => {
-                  const searchLower = compareSearch.toLowerCase();
-
-                  // Helper to check if item matches search
-                  const matchesSearch = (name: string, level: 'schemas' | 'tables' | 'columns') => {
-                    if (!searchLower) return true;
-                    if (compareFilterLevel === 'all' || compareFilterLevel === level) {
-                      return name.toLowerCase().includes(searchLower);
-                    }
-                    return false;
-                  };
-
-                  // Filter base schemas
-                  const filteredBaseSchemas = compareSchemas1.filter(schema => {
-                    const schemaInCompare = compareSchemas2.find(s => s.name === schema.name);
-                    const isDiff = !schemaInCompare || schema.tables.some(t => {
-                      const tInCompare = schemaInCompare?.tables.find(ct => ct.name === t.name);
-                      return !tInCompare || t.columns.length !== tInCompare.columns.length ||
-                        t.columns.some(c => !tInCompare.columns.find(cc => cc.name === c.name && cc.type === c.type));
-                    });
-                    if (compareShowOnlyDiffs && !isDiff) return false;
-                    if (!searchLower) return true;
-                    if (matchesSearch(schema.name, 'schemas')) return true;
-                    if (schema.tables.some(t => matchesSearch(t.name, 'tables'))) return true;
-                    if (schema.tables.some(t => t.columns.some(c => matchesSearch(c.name, 'columns')))) return true;
-                    return false;
-                  });
-
-                  // Filter compare schemas
-                  const filteredCompareSchemas = compareSchemas2.filter(schema => {
-                    const schemaInBase = compareSchemas1.find(s => s.name === schema.name);
-                    const isDiff = !schemaInBase || schema.tables.some(t => {
-                      const tInBase = schemaInBase?.tables.find(ct => ct.name === t.name);
-                      return !tInBase || t.columns.length !== tInBase.columns.length ||
-                        t.columns.some(c => !tInBase.columns.find(cc => cc.name === c.name && cc.type === c.type));
-                    });
-                    if (compareShowOnlyDiffs && !isDiff) return false;
-                    if (!searchLower) return true;
-                    if (matchesSearch(schema.name, 'schemas')) return true;
-                    if (schema.tables.some(t => matchesSearch(t.name, 'tables'))) return true;
-                    if (schema.tables.some(t => t.columns.some(c => matchesSearch(c.name, 'columns')))) return true;
-                    return false;
-                  });
-
-                  return (
-                <div style={{ display: 'flex', gap: '16px', height: '100%' }}>
-                  {/* Base Side */}
-                  <div style={{ flex: 1, overflow: 'auto', borderRight: '1px solid var(--border-light)', paddingRight: '16px' }}>
-                    <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '12px', position: 'sticky', top: 0, background: 'var(--bg-primary)', padding: '4px 0' }}>
-                      Base: {compareCatalog1}:{compareBranch1}
-                    </div>
-                    {filteredBaseSchemas.map((schema) => {
-                      const isSchemaExpanded = compareExpandedSchemas.has(schema.name);
-                      const schemaInCompare = compareSchemas2.find(s => s.name === schema.name);
-                      // Check for table-level differences
-                      const hasTableDiff = schemaInCompare && (
-                        schema.tables.length !== schemaInCompare.tables.length ||
-                        schema.tables.some(t => !schemaInCompare.tables.find(ct => ct.name === t.name)) ||
-                        schema.tables.some(t => {
-                          const ct = schemaInCompare.tables.find(ct => ct.name === t.name);
-                          return ct && (t.columns.length !== ct.columns.length ||
-                            t.columns.some(c => !ct.columns.find(cc => cc.name === c.name && cc.type === c.type)));
-                        })
-                      );
-                      const schemaStatus = !schemaInCompare ? 'removed' : hasTableDiff ? 'modified' : 'same';
-
-                      return (
-                        <div key={schema.name} style={{ marginBottom: '8px' }}>
-                          <div
-                            className="hover-bg"
-                            onClick={() => toggleCompareSchema(schema.name)}
-                            style={{
-                              padding: '6px 8px',
-                              borderRadius: 'var(--radius-sm)',
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: '6px',
-                              cursor: 'pointer',
-                              background: schemaStatus === 'modified' ? 'var(--warning-bg)' : undefined,
-                            }}
-                          >
-                            {isSchemaExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                            {schemaStatus === 'removed' && <span style={{ color: 'var(--error)', fontWeight: 700 }}>−</span>}
-                            {schemaStatus === 'modified' && <AlertTriangle size={12} style={{ color: 'var(--warning)' }} />}
-                            <FolderOpen size={14} style={{ color: 'var(--accent-primary)' }} />
-                            <span style={{ fontWeight: 500, fontSize: '13px', color: schemaStatus === 'removed' ? 'var(--error)' : undefined }}>{schema.name}</span>
-                            <span style={{ marginLeft: 'auto', fontSize: '10px', color: 'var(--text-muted)' }}>{schema.tables.length}</span>
-                          </div>
-                          {isSchemaExpanded && (
-                            <div style={{ marginLeft: '20px', borderLeft: '1px solid var(--border-light)', paddingLeft: '8px' }}>
-                              {schema.tables.map((table) => {
-                                const isTableExpanded = compareExpandedTables.has(`${schema.name}.${table.name}`);
-                                const tableInCompare = schemaInCompare?.tables.find(t => t.name === table.name);
-                                const hasColDiff = tableInCompare && (
-                                  table.columns.length !== tableInCompare.columns.length ||
-                                  table.columns.some(c => {
-                                    const cmpCol = tableInCompare.columns.find(tc => tc.name === c.name);
-                                    return !cmpCol || cmpCol.type !== c.type;
-                                  })
-                                );
-                                const tableStatus = !tableInCompare ? 'removed' : hasColDiff ? 'modified' : 'same';
-
-                                return (
-                                  <div key={table.name} style={{ marginBottom: '4px' }}>
-                                    <div
-                                      className="hover-bg"
-                                      onClick={() => toggleCompareTable(`${schema.name}.${table.name}`)}
-                                      style={{
-                                        padding: '4px 6px',
-                                        borderRadius: 'var(--radius-sm)',
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        gap: '6px',
-                                        cursor: 'pointer',
-                                      }}
-                                    >
-                                      {isTableExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                                      {tableStatus === 'removed' && <span style={{ color: 'var(--error)', fontWeight: 700, fontSize: '14px' }}>−</span>}
-                                      {tableStatus === 'modified' && <AlertTriangle size={10} style={{ color: 'var(--warning)' }} />}
-                                      <Table size={12} style={{ color: 'var(--accent-secondary)' }} />
-                                      <span style={{ fontSize: '12px', color: tableStatus === 'removed' ? 'var(--error)' : undefined }}>{table.name}</span>
-                                      <span style={{ marginLeft: 'auto', fontSize: '9px', color: 'var(--text-muted)' }}>{table.columns.length}</span>
-                                    </div>
-                                    {isTableExpanded && (
-                                      <div style={{ marginLeft: '18px', marginTop: '2px' }}>
-                                        {table.columns.map((col) => {
-                                          const colInCompare = tableInCompare?.columns.find(c => c.name === col.name);
-                                          const colStatus = !colInCompare ? 'removed' : colInCompare.type !== col.type ? 'modified' : 'same';
-                                          return (
-                                            <div key={col.name} style={{
-                                              padding: '2px 6px',
-                                              fontSize: '11px',
-                                              display: 'flex',
-                                              alignItems: 'center',
-                                              gap: '4px',
-                                              background: colStatus === 'removed' ? 'var(--error-bg)' : colStatus === 'modified' ? 'var(--warning-bg)' : undefined,
-                                              borderRadius: '2px',
-                                            }}>
-                                              {colStatus === 'removed' && <span style={{ color: 'var(--error)', fontWeight: 700 }}>−</span>}
-                                              {colStatus === 'modified' && <AlertTriangle size={9} style={{ color: 'var(--warning)' }} />}
-                                              <Type size={10} className="text-muted" />
-                                              <span style={{ color: colStatus === 'removed' ? 'var(--error)' : undefined }}>{col.name}</span>
-                                              <span style={{ marginLeft: 'auto', fontFamily: 'monospace', fontSize: '9px', color: 'var(--text-muted)' }}>{col.type}</span>
-                                            </div>
-                                          );
-                                        })}
-                                      </div>
-                                    )}
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                  {/* Compare Side */}
-                  <div style={{ flex: 1, overflow: 'auto' }}>
-                    <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '12px', position: 'sticky', top: 0, background: 'var(--bg-primary)', padding: '4px 0' }}>
-                      Compare: {compareCatalog2}:{compareBranch2}
-                    </div>
-                    {filteredCompareSchemas.map((schema) => {
-                      const isSchemaExpanded = compareExpandedSchemas.has(schema.name);
-                      const schemaInBase = compareSchemas1.find(s => s.name === schema.name);
-                      // Check for table-level differences
-                      const hasTableDiff = schemaInBase && (
-                        schema.tables.length !== schemaInBase.tables.length ||
-                        schema.tables.some(t => !schemaInBase.tables.find(ct => ct.name === t.name)) ||
-                        schema.tables.some(t => {
-                          const ct = schemaInBase.tables.find(ct => ct.name === t.name);
-                          return ct && (t.columns.length !== ct.columns.length ||
-                            t.columns.some(c => !ct.columns.find(cc => cc.name === c.name && cc.type === c.type)));
-                        })
-                      );
-                      const schemaStatus = !schemaInBase ? 'added' : hasTableDiff ? 'modified' : 'same';
-
-                      return (
-                        <div key={schema.name} style={{ marginBottom: '8px' }}>
-                          <div
-                            className="hover-bg"
-                            onClick={() => toggleCompareSchema(schema.name)}
-                            style={{
-                              padding: '6px 8px',
-                              borderRadius: 'var(--radius-sm)',
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: '6px',
-                              cursor: 'pointer',
-                              background: schemaStatus === 'modified' ? 'var(--warning-bg)' : undefined,
-                            }}
-                          >
-                            {isSchemaExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                            {schemaStatus === 'added' && <span style={{ color: 'var(--success)', fontWeight: 700 }}>+</span>}
-                            {schemaStatus === 'modified' && <AlertTriangle size={12} style={{ color: 'var(--warning)' }} />}
-                            <FolderOpen size={14} style={{ color: 'var(--accent-primary)' }} />
-                            <span style={{ fontWeight: 500, fontSize: '13px', color: schemaStatus === 'added' ? 'var(--success)' : undefined }}>{schema.name}</span>
-                            <span style={{ marginLeft: 'auto', fontSize: '10px', color: 'var(--text-muted)' }}>{schema.tables.length}</span>
-                          </div>
-                          {isSchemaExpanded && (
-                            <div style={{ marginLeft: '20px', borderLeft: '1px solid var(--border-light)', paddingLeft: '8px' }}>
-                              {schema.tables.map((table) => {
-                                const isTableExpanded = compareExpandedTables.has(`${schema.name}.${table.name}`);
-                                const tableInBase = schemaInBase?.tables.find(t => t.name === table.name);
-                                const hasColDiff = tableInBase && (
-                                  table.columns.length !== tableInBase.columns.length ||
-                                  table.columns.some(c => {
-                                    const baseCol = tableInBase.columns.find(tc => tc.name === c.name);
-                                    return !baseCol || baseCol.type !== c.type;
-                                  })
-                                );
-                                const tableStatus = !tableInBase ? 'added' : hasColDiff ? 'modified' : 'same';
-
-                                return (
-                                  <div key={table.name} style={{ marginBottom: '4px' }}>
-                                    <div
-                                      className="hover-bg"
-                                      onClick={() => toggleCompareTable(`${schema.name}.${table.name}`)}
-                                      style={{
-                                        padding: '4px 6px',
-                                        borderRadius: 'var(--radius-sm)',
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        gap: '6px',
-                                        cursor: 'pointer',
-                                      }}
-                                    >
-                                      {isTableExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                                      {tableStatus === 'added' && <span style={{ color: 'var(--success)', fontWeight: 700 }}>+</span>}
-                                      {tableStatus === 'modified' && <AlertTriangle size={10} style={{ color: 'var(--warning)' }} />}
-                                      <Table size={12} style={{ color: 'var(--accent-secondary)' }} />
-                                      <span style={{ fontSize: '12px', color: tableStatus === 'added' ? 'var(--success)' : undefined }}>{table.name}</span>
-                                      <span style={{ marginLeft: 'auto', fontSize: '9px', color: 'var(--text-muted)' }}>{table.columns.length}</span>
-                                    </div>
-                                    {isTableExpanded && (
-                                      <div style={{ marginLeft: '18px', marginTop: '2px' }}>
-                                        {table.columns.map((col) => {
-                                          const colInBase = tableInBase?.columns.find(c => c.name === col.name);
-                                          const colStatus = !colInBase ? 'added' : colInBase.type !== col.type ? 'modified' : 'same';
-                                          return (
-                                            <div key={col.name} style={{
-                                              padding: '2px 6px',
-                                              fontSize: '11px',
-                                              display: 'flex',
-                                              alignItems: 'center',
-                                              gap: '4px',
-                                              background: colStatus === 'added' ? 'var(--success-bg)' : colStatus === 'modified' ? 'var(--warning-bg)' : undefined,
-                                              borderRadius: '2px',
-                                            }}>
-                                              {colStatus === 'added' && <span style={{ color: 'var(--success)', fontWeight: 700 }}>+</span>}
-                                              {colStatus === 'modified' && <AlertTriangle size={9} style={{ color: 'var(--warning)' }} />}
-                                              <Type size={10} className="text-muted" />
-                                              <span style={{ color: colStatus === 'added' ? 'var(--success)' : undefined }}>{col.name}</span>
-                                              <span style={{ marginLeft: 'auto', fontFamily: 'monospace', fontSize: '9px', color: 'var(--text-muted)' }}>{col.type}</span>
-                                            </div>
-                                          );
-                                        })}
-                                      </div>
-                                    )}
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-                  );
-                })()
-              ) : (
-                /* Unified Diff View */
-                filteredDiff.map((schema) => {
-                  const schemaStatusStyle = {
-                    'left-only': { bg: 'var(--error-bg)', icon: <Minus size={12} style={{ color: 'var(--error)' }} /> },
-                    'right-only': { bg: 'var(--success-bg)', icon: <Plus size={12} style={{ color: 'var(--success)' }} /> },
-                    'modified': { bg: 'var(--warning-bg)', icon: <AlertTriangle size={12} style={{ color: 'var(--warning)' }} /> },
-                    'same': { bg: 'transparent', icon: null },
-                  }[schema.status];
-
-                  if (compareShowOnlyDiffs && schema.status === 'same') return null;
-
-                  const isSchemaExpanded = compareExpandedSchemas.has(schema.schemaName);
-
-                  return (
-                    <div key={schema.schemaName} style={{ marginBottom: '8px' }}>
-                      {/* Schema Row */}
-                      <div
-                        className="hover-bg"
-                        onClick={() => toggleCompareSchema(schema.schemaName)}
-                        style={{
-                          padding: '8px 12px',
-                          background: schemaStatusStyle.bg,
-                          borderRadius: 'var(--radius-md)',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '8px',
-                          fontWeight: 600,
-                          fontSize: '14px',
-                          cursor: 'pointer',
-                        }}
-                      >
-                        {isSchemaExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-                        {schemaStatusStyle.icon}
-                        <FolderOpen size={16} style={{ color: 'var(--accent-primary)' }} />
-                        <span>{schema.schemaName}</span>
-                        <span style={{ marginLeft: 'auto', fontSize: '11px', color: 'var(--text-muted)', fontWeight: 400 }}>
-                          {schema.tables.length} tables
-                        </span>
-                      </div>
-
-                      {/* Tables */}
-                      {isSchemaExpanded && (
-                        <div style={{ marginLeft: '20px', borderLeft: '2px solid var(--border-light)', paddingLeft: '12px', marginTop: '4px' }}>
-                          {schema.tables.map((table) => {
-                            const tableStatusStyle = {
-                              'left-only': { bg: 'var(--error-bg)', icon: <Minus size={11} style={{ color: 'var(--error)' }} /> },
-                              'right-only': { bg: 'var(--success-bg)', icon: <Plus size={11} style={{ color: 'var(--success)' }} /> },
-                              'modified': { bg: 'var(--warning-bg)', icon: <AlertTriangle size={11} style={{ color: 'var(--warning)' }} /> },
-                              'same': { bg: 'transparent', icon: null },
-                            }[table.status];
-
-                            if (compareShowOnlyDiffs && table.status === 'same') return null;
-
-                            const tableKey = `${schema.schemaName}.${table.tableName}`;
-                            const isTableExpanded = compareExpandedTables.has(tableKey);
-
-                            return (
-                              <div key={table.tableName} style={{ marginBottom: '4px' }}>
-                                {/* Table Row */}
-                                <div
-                                  className="hover-bg"
-                                  onClick={() => toggleCompareTable(tableKey)}
-                                  style={{
-                                    padding: '6px 10px',
-                                    background: tableStatusStyle.bg,
-                                    borderRadius: 'var(--radius-sm)',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: '6px',
-                                    fontSize: '13px',
-                                    cursor: 'pointer',
-                                  }}
-                                >
-                                  {isTableExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                                  {tableStatusStyle.icon}
-                                  <Table size={14} style={{ color: 'var(--accent-secondary)' }} />
-                                  <span style={{ fontWeight: 500 }}>{table.tableName}</span>
-                                  <span style={{ marginLeft: 'auto', fontSize: '10px', color: 'var(--text-muted)' }}>
-                                    {table.leftCols.length === table.rightCols.length
-                                      ? `${table.leftCols.length} cols`
-                                      : `${table.leftCols.length} → ${table.rightCols.length} cols`}
-                                  </span>
-                                </div>
-
-                                {/* Columns (show when table is expanded) */}
-                                {isTableExpanded && (
-                                  <div style={{ marginLeft: '24px', marginTop: '4px' }}>
-                                    {table.columns.map((col) => {
-                                      const colStatusStyle = {
-                                        'left-only': { bg: 'var(--error-bg)', icon: <Minus size={10} style={{ color: 'var(--error)' }} /> },
-                                        'right-only': { bg: 'var(--success-bg)', icon: <Plus size={10} style={{ color: 'var(--success)' }} /> },
-                                        'type-changed': { bg: 'var(--warning-bg)', icon: <AlertTriangle size={10} style={{ color: 'var(--warning)' }} /> },
-                                        'same': { bg: 'transparent', icon: null },
-                                      }[col.status];
-
-                                      if (compareShowOnlyDiffs && col.status === 'same') return null;
-
-                                      return (
-                                        <div key={col.colName} style={{
-                                          padding: '3px 8px',
-                                          background: colStatusStyle.bg,
-                                          borderRadius: '2px',
-                                          display: 'flex',
-                                          alignItems: 'center',
-                                          gap: '6px',
-                                          fontSize: '11px',
-                                          marginBottom: '2px',
-                                        }}>
-                                          {colStatusStyle.icon}
-                                          <Type size={10} className="text-muted" />
-                                          <span>{col.colName}</span>
-                                          <span style={{ marginLeft: 'auto', fontFamily: 'monospace', fontSize: '10px', color: 'var(--text-muted)' }}>
-                                            {col.status === 'type-changed' ? (
-                                              <><span style={{ textDecoration: 'line-through' }}>{col.leftType}</span> → {col.rightType}</>
-                                            ) : (
-                                              col.colType
-                                            )}
-                                          </span>
-                                        </div>
-                                      );
-                                    })}
-                                  </div>
-                                )}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

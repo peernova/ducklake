@@ -1,14 +1,18 @@
 package io.ducklake.service.service;
 
+import io.ducklake.service.event.service.EventService;
 import io.ducklake.service.model.dto.*;
 import io.ducklake.service.tracing.TraceContext;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.observation.annotation.Observed;
 import io.micrometer.tracing.Span;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 
 import java.sql.*;
 import java.util.*;
@@ -21,7 +25,11 @@ public class QueryService {
     private final DuckDBService duckDBService;
     private final CatalogService catalogService;
     private final TraceContext traceContext;
+    private final EventService eventService;
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    private static final String USER_ID_HEADER = "X-User-Id";
+    private static final String DEFAULT_USER = "anonymous";
 
     /**
      * Analyze a SQL query to extract table references using ducklake_analyze_query.
@@ -260,13 +268,40 @@ public class QueryService {
 
         try {
             String sql = request.getSql();
+            Map<String, String> branchContext = request.getBranchContext();
 
-            // Build policies from branch context and any RLS policies
-            Map<String, TablePolicy> policies = buildPolicies(request);
-            if (!policies.isEmpty()) {
-                sql = rewriteQueryInternal(conn, sql, policies);
-                log.debug("Rewritten SQL: {}", sql);
+            // Set up branch context by attaching catalogs and switching branches
+            if (branchContext != null && !branchContext.isEmpty()) {
+                for (Map.Entry<String, String> entry : branchContext.entrySet()) {
+                    String catalogId = entry.getKey();
+                    String branchName = entry.getValue();
+
+                    // Get and attach the catalog (if not already attached)
+                    var catalog = catalogService.getCatalog(catalogId)
+                        .orElseThrow(() -> new SQLException("Catalog not found: " + catalogId));
+                    duckDBService.attachCatalog(conn, catalog);
+
+                    // Set as default catalog so unqualified table names resolve correctly
+                    try (Statement stmt = conn.createStatement()) {
+                        stmt.execute("USE " + catalogId);
+                        log.debug("Set default catalog to {}", catalogId);
+                    }
+
+                    // Switch to the specified branch
+                    String useBranchSql = String.format(
+                        "CALL ducklake_use_branch('%s', '%s')",
+                        catalogId.replace("'", "''"),
+                        branchName.replace("'", "''")
+                    );
+                    try (Statement stmt = conn.createStatement()) {
+                        stmt.execute(useBranchSql);
+                        log.debug("Switched to branch {} on catalog {}", branchName, catalogId);
+                    }
+                }
             }
+
+            // Analyze query to get table references (on same connection with catalogs attached)
+            List<QueryTableReference> tableReferences = analyzeQueryInternal(conn, sql, branchContext);
 
             // Execute the query with manual span
             Span sqlSpan = traceContext.startSpan("duckdb-sql-execute");
@@ -283,20 +318,33 @@ public class QueryService {
 
                     if (hasResultSet) {
                         try (ResultSet rs = stmt.getResultSet()) {
-                            QueryResponse response = buildQueryResponse(rs, startTime, request);
+                            QueryResponse response = buildQueryResponse(rs, startTime, request, tableReferences);
                             sqlSpan.tag("db.rows", String.valueOf(response.getRowCount()));
+
+                            // Log table access for each table referenced
+                            logTableAccess(tableReferences, response.getExecutionTimeMs().intValue(),
+                                    response.getRowCount(), response.getTraceId(), response.getSpanId());
+
                             return response;
                         }
                     } else {
                         // DML statement
                         long rowCount = stmt.getUpdateCount();
                         sqlSpan.tag("db.rows_affected", String.valueOf(rowCount));
-                        return QueryResponse.builder()
+
+                        QueryResponse response = QueryResponse.builder()
                                 .rowCount(rowCount)
                                 .executionTimeMs((double) (System.currentTimeMillis() - startTime))
+                                .tableReferences(tableReferences)
                                 .traceId(traceContext.getTraceId())
                                 .spanId(traceContext.getSpanId())
                                 .build();
+
+                        // Log table access for DML
+                        logTableAccess(tableReferences, response.getExecutionTimeMs().intValue(),
+                                rowCount, response.getTraceId(), response.getSpanId());
+
+                        return response;
                     }
                 }
             } catch (Exception e) {
@@ -308,6 +356,79 @@ public class QueryService {
         } finally {
             duckDBService.releaseConnection(conn);
         }
+    }
+
+    /**
+     * Log access to tables from query execution.
+     */
+    private void logTableAccess(List<QueryTableReference> tableReferences, int executionTimeMs,
+                                long rowCount, String traceId, String spanId) {
+        try {
+            String userId = getCurrentUserId();
+            eventService.recordQueryTableAccess(userId, tableReferences, executionTimeMs, rowCount, traceId, spanId);
+        } catch (Exception e) {
+            log.warn("Failed to log table access: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Get current user ID from request header.
+     */
+    private String getCurrentUserId() {
+        ServletRequestAttributes attrs = (ServletRequestAttributes) RequestContextHolder.getRequestAttributes();
+        if (attrs != null) {
+            HttpServletRequest request = attrs.getRequest();
+            String userId = request.getHeader(USER_ID_HEADER);
+            if (userId != null && !userId.isEmpty()) {
+                return userId;
+            }
+        }
+        return DEFAULT_USER;
+    }
+
+    /**
+     * Analyze query on existing connection to get table references with branch info.
+     */
+    private List<QueryTableReference> analyzeQueryInternal(Connection conn, String sql, Map<String, String> branchContext) {
+        List<QueryTableReference> references = new ArrayList<>();
+        try {
+            String analyzeSql = "SELECT * FROM ducklake_analyze_query(?, skip_errors := true)";
+            try (PreparedStatement stmt = conn.prepareStatement(analyzeSql)) {
+                stmt.setString(1, sql);
+                try (ResultSet rs = stmt.executeQuery()) {
+                    while (rs.next()) {
+                        String tableName = rs.getString("table_name");
+                        String refType = rs.getString("reference_type");
+
+                        // Skip error rows
+                        if ("ERROR".equals(tableName) || "ERROR".equals(refType)) {
+                            continue;
+                        }
+
+                        String catalogName = rs.getString("catalog_name");
+                        List<String> columns = extractArrayColumn(rs, "columns");
+
+                        // Look up branch from context
+                        String branchName = null;
+                        if (branchContext != null && catalogName != null) {
+                            branchName = branchContext.get(catalogName);
+                        }
+
+                        references.add(QueryTableReference.builder()
+                                .catalogName(catalogName)
+                                .schemaName(rs.getString("schema_name"))
+                                .tableName(tableName)
+                                .branchName(branchName)
+                                .referenceType(refType)
+                                .columns(columns)
+                                .build());
+                    }
+                }
+            }
+        } catch (SQLException e) {
+            log.warn("Failed to analyze query for table references: {}", e.getMessage());
+        }
+        return references;
     }
 
     private String rewriteQueryInternal(Connection conn, String sql, Map<String, TablePolicy> policies) throws SQLException {
@@ -363,7 +484,7 @@ public class QueryService {
         }
     }
 
-    private QueryResponse buildQueryResponse(ResultSet rs, long startTime, QueryRequest request) throws SQLException {
+    private QueryResponse buildQueryResponse(ResultSet rs, long startTime, QueryRequest request, List<QueryTableReference> tableReferences) throws SQLException {
         ResultSetMetaData meta = rs.getMetaData();
         int columnCount = meta.getColumnCount();
 
@@ -401,6 +522,7 @@ public class QueryService {
                 .rowCount(rowCount)
                 .executionTimeMs((double) (System.currentTimeMillis() - startTime))
                 .branch(branch)
+                .tableReferences(tableReferences)
                 .traceId(traceContext.getTraceId())
                 .spanId(traceContext.getSpanId())
                 .build();

@@ -1,7 +1,9 @@
 package io.ducklake.service.controller;
 
+import io.ducklake.service.event.annotation.AccessLog;
 import io.ducklake.service.model.Catalog;
 import io.ducklake.service.model.dto.*;
+import io.ducklake.service.service.BranchService;
 import io.ducklake.service.service.CatalogService;
 import io.ducklake.service.service.DiscoveryService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -190,6 +192,7 @@ public class CatalogController {
             @ApiResponse(responseCode = "500", description = "Internal server error",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
     })
+    @AccessLog(resourceType = "table", resourceIdParams = {"catalogId", "schemaName", "tableName"}, resourceNameParam = "tableName")
     public ResponseEntity<TableInfo> getTableInfo(
             @Parameter(description = "Catalog identifier") @PathVariable String catalogId,
             @Parameter(description = "Schema name") @PathVariable String schemaName,

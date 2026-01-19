@@ -1,0 +1,141 @@
+# Docker Compose for DuckLake Access Events Infrastructure
+#
+# Usage:
+#   PostgreSQL:  docker-compose --profile postgres up -d
+#   ClickHouse:  docker-compose --profile clickhouse up -d
+#   Both:        docker-compose --profile postgres --profile clickhouse up -d
+
+version: '3.8'
+
+services:
+  # =============================================================
+  # OpenTelemetry Collector - Routes events to storage backends
+  # =============================================================
+
+  otel-collector-postgres:
+    image: otel/opentelemetry-collector-contrib:latest
+    profiles: [postgres]
+    container_name: ducklake-otel-postgres
+    command: ["--config=/etc/otel/config.yaml"]
+    volumes:
+      - ./otel-collector-postgres.yaml:/etc/otel/config.yaml:ro
+      - ./data:/data  # Audit logs output directory
+    ports:
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+      - "13133:13133" # Health check
+      - "55679:55679" # zPages
+      - "8888:8888"   # Prometheus metrics
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
+  otel-collector-clickhouse:
+    image: otel/opentelemetry-collector-contrib:latest
+    profiles: [clickhouse]
+    container_name: ducklake-otel-clickhouse
+    command: ["--config=/etc/otel/config.yaml"]
+    volumes:
+      - ./otel-collector-clickhouse.yaml:/etc/otel/config.yaml:ro
+    ports:
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+      - "13133:13133" # Health check
+      - "55679:55679" # zPages
+      - "8888:8888"   # Prometheus metrics
+    environment:
+      - CLICKHOUSE_USER=${CLICKHOUSE_USER:-default}
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:-}
+    depends_on:
+      - clickhouse
+    restart: unless-stopped
+
+  # =============================================================
+  # PostgreSQL - Simple, reliable storage for small-medium scale
+  # =============================================================
+
+  postgres:
+    image: postgres:16-alpine
+    profiles: [postgres]
+    container_name: ducklake-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ducklake}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ducklake}
+      POSTGRES_DB: ${POSTGRES_DB:-ducklake_service}
+    ports:
+      - "5434:5432"  # Changed to 5434 to avoid conflict
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-postgres.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ducklake}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # =============================================================
+  # ClickHouse - High-performance analytics for large scale
+  # =============================================================
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    profiles: [clickhouse]
+    container_name: ducklake-clickhouse
+    environment:
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-}
+      CLICKHOUSE_DB: default
+    ports:
+      - "8123:8123"   # HTTP
+      - "9000:9000"   # Native
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - ./init-clickhouse.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./clickhouse-users.xml:/etc/clickhouse-server/users.d/remote-users.xml:ro
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # =============================================================
+  # Jaeger - Distributed Tracing UI
+  # =============================================================
+
+  jaeger:
+    image: jaegertracing/jaeger:2.1.0
+    profiles: [clickhouse, jaeger]
+    container_name: ducklake-jaeger
+    ports:
+      - "16686:16686"  # UI
+      - "4417:4317"    # OTLP gRPC (remapped to avoid conflict with OTel collector)
+      - "4418:4318"    # OTLP HTTP (remapped to avoid conflict with OTel collector)
+    restart: unless-stopped
+
+  # =============================================================
+  # Optional: Grafana for visualization
+  # =============================================================
+
+  grafana:
+    image: grafana/grafana:latest
+    profiles: [monitoring]
+    container_name: ducklake-grafana
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_INSTALL_PLUGINS=grafana-clickhouse-datasource
+    volumes:
+      - grafana_data:/var/lib/grafana
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  clickhouse_data:
+  grafana_data:

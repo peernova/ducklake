@@ -26,6 +26,21 @@ spring:
       write-dates-as-timestamps: false
     default-property-inclusion: non_null
 
+# Event Store Configuration
+# Options: postgres (default), clickhouse
+event:
+  store:
+    type: postgres
+    postgres:
+      # Uses same database as main datasource by default
+      url: jdbc:postgresql://localhost:5433/ducklake_service
+      username: postgres
+      password: postgres
+    clickhouse:
+      url: jdbc:clickhouse://localhost:8123/default
+      username: default
+      password: ""
+
 # DuckLake specific config
 ducklake:
   duckdb:
@@ -57,11 +72,34 @@ logging:
     io.ducklake: DEBUG
     org.springframework.web: INFO
 
-# Tracing - export to Jaeger via OTLP
+# OpenTelemetry Configuration
+# Access events are emitted via OTel Logs API
+# Configure these via environment variables or here
+otel:
+  exporter:
+    otlp:
+      endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}
+      # For gRPC use: http://localhost:4317
+  logs:
+    exporter: otlp
+  service:
+    name: ducklake-service
+
+# Spring Boot Actuator + Tracing
 management:
   tracing:
     sampling:
       probability: 1.0  # 100% sampling for dev
   otlp:
     tracing:
-      endpoint: http://localhost:4318/v1/traces
+      endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/traces
+    logs:
+      endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/logs
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  metrics:
+    export:
+      prometheus:
+        enabled: true

@@ -1,0 +1,62 @@
+# Test config - exports AUDIT logs to file for PostgreSQL loading
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  # Filter: ONLY keep AUDIT logs (has logback.marker = AUDIT)
+  filter/audit_only:
+    logs:
+      include:
+        match_type: strict
+        record_attributes:
+          - key: logback.marker
+            value: '["AUDIT"]'
+
+  # Batch for efficiency
+  batch:
+    timeout: 5s
+    send_batch_size: 100
+
+exporters:
+  # Debug exporter - logs to console
+  debug:
+    verbosity: detailed
+    sampling_initial: 5
+    sampling_thereafter: 100
+
+  # File exporter - writes OTLP JSON for PostgreSQL loading
+  file/audit:
+    path: /tmp/audit_logs.json
+    rotation:
+      max_megabytes: 10
+      max_days: 1
+      max_backups: 3
+
+service:
+  pipelines:
+    # All traces
+    traces:
+      receivers: [otlp]
+      exporters: [debug]
+
+    # AUDIT logs only → file for PostgreSQL
+    logs/audit:
+      receivers: [otlp]
+      processors: [filter/audit_only, batch]
+      exporters: [file/audit, debug]
+
+    # All other logs → debug only
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]
+
+    # Metrics
+    metrics:
+      receivers: [otlp]
+      exporters: [debug]

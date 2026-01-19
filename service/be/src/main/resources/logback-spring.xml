@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Logback config for DuckLake Service.
+
+  OTel Logback Appender sends logs directly to the collector.
+  The Java agent auto-configures the connection.
+-->
+<configuration>
+    <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+    <include resource="org/springframework/boot/logging/logback/console-appender.xml"/>
+
+    <!-- OTel Logback Appender - sends logs to collector -->
+    <appender name="OTEL" class="io.opentelemetry.instrumentation.logback.appender.v1_0.OpenTelemetryAppender">
+        <captureExperimentalAttributes>true</captureExperimentalAttributes>
+        <captureMarkerAttribute>true</captureMarkerAttribute>
+        <captureMdcAttributes>*</captureMdcAttributes>
+    </appender>
+
+    <!-- Application loggers -->
+    <logger name="io.ducklake" level="DEBUG"/>
+    <logger name="org.springframework" level="INFO"/>
+
+    <!-- Root logger - console + OTel export -->
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="OTEL"/>
+    </root>
+</configuration>

@@ -137,6 +137,15 @@ export interface QueryRequest {
   timeout_ms?: number;
 }
 
+export interface QueryTableReference {
+  catalog_name?: string;
+  schema_name?: string;
+  table_name: string;
+  branch_name?: string;
+  reference_type?: string;
+  columns?: string[];
+}
+
 export interface QueryResponse {
   columns: ColumnInfo[];
   rows: Array<Array<string | number | boolean | null>>;
@@ -144,6 +153,7 @@ export interface QueryResponse {
   execution_time_ms: number;
   branch?: string;
   snapshot_id?: number;
+  table_references?: QueryTableReference[];
 }
 
 // ============================================================================

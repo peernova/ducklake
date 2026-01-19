@@ -16,19 +16,42 @@ repositories {
     mavenCentral()
 }
 
+// IMPORTANT: OTel BOMs must be declared BEFORE Spring Boot's BOM
+// to prevent Spring from overriding OTel SDK versions
+dependencyManagement {
+    imports {
+        // OTel BOMs first - v2.24.0 with SDK 1.58.0
+        mavenBom 'io.opentelemetry:opentelemetry-bom:1.58.0'
+        mavenBom 'io.opentelemetry.instrumentation:opentelemetry-instrumentation-bom-alpha:2.24.0-alpha'
+    }
+}
+
 dependencies {
     // Spring Boot
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     implementation 'org.springframework.boot:spring-boot-starter-validation'
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    implementation 'org.springframework.boot:spring-boot-starter-aop'
 
-    // OpenTelemetry tracing
-    implementation 'io.micrometer:micrometer-tracing-bridge-otel'
+    // Structured JSON logging (for local debugging)
+    implementation 'net.logstash.logback:logstash-logback-encoder:7.4'
+
+    // OTel Spring Boot Starter - handles traces, logs, metrics
+    implementation 'io.opentelemetry.instrumentation:opentelemetry-spring-boot-starter'
+    implementation 'io.opentelemetry.instrumentation:opentelemetry-logback-appender-1.0'
     implementation 'io.opentelemetry:opentelemetry-exporter-otlp'
+
+    // Micrometer Tracing (used by Spring Boot Actuator)
+    implementation 'io.micrometer:micrometer-tracing-bridge-otel'
+    implementation 'io.micrometer:micrometer-observation'
 
     // PostgreSQL for catalog registry
     implementation 'org.postgresql:postgresql:42.7.1'
+
+    // ClickHouse JDBC (optional - for event store)
+    implementation 'com.clickhouse:clickhouse-jdbc:0.6.0'
+    implementation 'org.apache.httpcomponents.client5:httpclient5:5.3'
 
     // DuckDB JDBC - local build
     implementation files('libs/duckdb_jdbc.jar')

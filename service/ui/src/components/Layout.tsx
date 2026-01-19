@@ -6,6 +6,7 @@ import {
   Settings,
   Terminal,
   FileCode,
+  Activity,
 } from 'lucide-react';
 
 export default function Layout() {
@@ -13,6 +14,7 @@ export default function Layout() {
   const navItems = [
     { path: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
     { path: '/catalogs', icon: Database, label: 'Catalogs' },
+    { path: '/resource-access-log', icon: Activity, label: 'Resource Access Log' },
     { path: '/query', icon: Terminal, label: 'Query' },
     { path: '/api-docs', icon: FileCode, label: 'API Docs' },
   ];

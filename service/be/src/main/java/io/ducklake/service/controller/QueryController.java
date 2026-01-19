@@ -1,5 +1,6 @@
 package io.ducklake.service.controller;
 
+import io.ducklake.service.event.annotation.AccessLog;
 import io.ducklake.service.exception.QueryException;
 import io.ducklake.service.model.dto.ErrorResponse;
 import io.ducklake.service.model.dto.ExecuteRequest;
@@ -42,6 +43,7 @@ public class QueryController {
             @ApiResponse(responseCode = "500", description = "Internal server error",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
     })
+    @AccessLog(skip = true)  // Logged at table level in QueryService
     public ResponseEntity<QueryResponse> executeQuery(@Valid @RequestBody QueryRequest request) {
         log.info("Executing query: {}", truncateForLog(request.getSql()));
         try {
@@ -63,6 +65,7 @@ public class QueryController {
             @ApiResponse(responseCode = "500", description = "Internal server error",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
     })
+    @AccessLog(resourceType = "query", operation = "analyze")
     public ResponseEntity<List<TableInfo>> analyzeQuery(@RequestBody String sql) {
         log.debug("Analyzing query: {}", truncateForLog(sql));
         try {
@@ -88,6 +91,7 @@ public class QueryController {
             @ApiResponse(responseCode = "500", description = "Internal server error",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
     })
+    @AccessLog(resourceType = "branch", operation = "execute", resourceIdParams = {"catalogId"})
     public ResponseEntity<QueryResponse> executeOnBranch(
             @PathVariable String catalogId,
             @Valid @RequestBody ExecuteRequest request) {

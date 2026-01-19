@@ -221,6 +221,11 @@ a:hover {
   padding: 24px;
 }
 
+/* Disable transitions on query page containers for resize performance */
+.no-transition > div {
+  transition: none !important;
+}
+
 /* --------------------------------------------------------------------------
    Page Header
    -------------------------------------------------------------------------- */

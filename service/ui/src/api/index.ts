@@ -109,8 +109,13 @@ export const schemasApi = {
 // =============================================================================
 
 export const queryApi = {
-  execute: (catalogId: string, data: QueryRequest) =>
-    api.post<QueryResponse>(`/catalogs/${catalogId}/query`, data),
+  /** Execute a SELECT query with branch context */
+  execute: (data: QueryRequest) =>
+    api.post<QueryResponse>('/query', data),
+
+  /** Execute DDL/DML on a specific branch */
+  executeOnBranch: (catalogId: string, branchName: string, sql: string) =>
+    api.post<QueryResponse>(`/catalogs/${catalogId}/execute`, { branchName, sql }),
 };
 
 // =============================================================================

@@ -19,6 +19,9 @@ public class QueryResponse {
     private String branch;
     private Long snapshotId;
 
+    // Table references used in the query (catalog, schema, table, branch, columns)
+    private List<QueryTableReference> tableReferences;
+
     // Tracing info for audit
     private String traceId;
     private String spanId;
