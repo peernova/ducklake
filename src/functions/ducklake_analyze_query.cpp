@@ -1,4 +1,5 @@
 #include "functions/ducklake_table_functions.hpp"
+#include "storage/ducklake_scan.hpp"
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/planner/planner.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
@@ -30,6 +31,7 @@ struct TableReferenceInfo {
 	string catalog_name;
 	string schema_name;
 	string table_name;
+	string branch_name;
 	string reference_type;
 	vector<string> columns;
 };
@@ -46,6 +48,13 @@ static void ExtractTableReferences(LogicalOperator &op, vector<TableReferenceInf
 			info.schema_name = table_entry->schema.name;
 			info.table_name = table_entry->name;
 			info.reference_type = default_type;
+			// Get branch name from DuckLakeFunctionInfo if available
+			if (get.function.function_info) {
+				auto *dl_info = dynamic_cast<DuckLakeFunctionInfo *>(get.function.function_info.get());
+				if (dl_info && !dl_info->branch_name.empty()) {
+					info.branch_name = dl_info->branch_name;
+				}
+			}
 			// Get projected column names
 			auto &col_ids = get.GetColumnIds();
 			for (auto &col_id : col_ids) {
@@ -144,6 +153,7 @@ static unique_ptr<FunctionData> AnalyzeQueryBind(ClientContext &context, TableFu
 				row.push_back(table_info.catalog_name.empty() ? Value() : Value(table_info.catalog_name));
 				row.push_back(table_info.schema_name.empty() ? Value() : Value(table_info.schema_name));
 				row.push_back(Value(table_info.table_name));
+				row.push_back(table_info.branch_name.empty() ? Value() : Value(table_info.branch_name));
 				row.push_back(Value(table_info.reference_type));
 
 				// Convert columns to a list
@@ -162,6 +172,7 @@ static unique_ptr<FunctionData> AnalyzeQueryBind(ClientContext &context, TableFu
 		row.push_back(Value()); // catalog
 		row.push_back(Value()); // schema
 		row.push_back(Value("ERROR")); // table
+		row.push_back(Value()); // branch
 		row.push_back(Value("ERROR")); // type
 		row.push_back(Value::LIST(LogicalType::VARCHAR, {Value(ex.what())})); // columns contains error message
 		result->rows.push_back(std::move(row));
@@ -175,6 +186,9 @@ static unique_ptr<FunctionData> AnalyzeQueryBind(ClientContext &context, TableFu
 	return_types.emplace_back(LogicalType::VARCHAR);
 
 	names.emplace_back("table_name");
+	return_types.emplace_back(LogicalType::VARCHAR);
+
+	names.emplace_back("branch_name");
 	return_types.emplace_back(LogicalType::VARCHAR);
 
 	names.emplace_back("reference_type");

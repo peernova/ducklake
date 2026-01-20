@@ -408,9 +408,11 @@ public class QueryService {
                         String catalogName = rs.getString("catalog_name");
                         List<String> columns = extractArrayColumn(rs, "columns");
 
-                        // Look up branch from context
-                        String branchName = null;
-                        if (branchContext != null && catalogName != null) {
+                        // First try to get branch from AT clause (returned by ducklake_analyze_query)
+                        String branchName = rs.getString("branch_name");
+
+                        // Fall back to branch context if not specified in query
+                        if ((branchName == null || branchName.isEmpty()) && branchContext != null && catalogName != null) {
                             branchName = branchContext.get(catalogName);
                         }
 
