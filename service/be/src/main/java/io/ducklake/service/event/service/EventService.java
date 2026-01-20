@@ -171,6 +171,21 @@ public class EventService {
                     .spanId(spanId)
                     .build();
             eventEmitter.emit(tableEvent);
+
+            // 5. Log column access (one event per column)
+            if (ref.getColumns() != null && !ref.getColumns().isEmpty()) {
+                for (String columnName : ref.getColumns()) {
+                    String columnId = tableId + "/" + columnName;
+                    Map<String, String> columnPath = new HashMap<>();
+                    if (ref.getCatalogName() != null) columnPath.put("catalog", ref.getCatalogName());
+                    if (ref.getSchemaName() != null) columnPath.put("schema", ref.getSchemaName());
+                    if (ref.getBranchName() != null) columnPath.put("branch", ref.getBranchName());
+                    columnPath.put("table", ref.getTableName());
+
+                    emitResourceEvent(userId, "column", columnId, columnName,
+                            columnPath, operation, traceId, spanId);
+                }
+            }
         }
     }
 
