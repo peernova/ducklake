@@ -15,9 +15,11 @@ import org.springframework.stereotype.Service;
 
 import jakarta.annotation.PostConstruct;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Service layer for access events and favorites.
@@ -78,7 +80,8 @@ public class EventService {
 
     /**
      * Record access to tables from a query execution.
-     * Emits one event per table accessed.
+     * Emits events for each resource level: catalog, branch, schema, table, and columns.
+     * All events share the same trace ID for correlation.
      *
      * @param userId User who executed the query
      * @param tableReferences Tables accessed by the query
@@ -94,35 +97,72 @@ public class EventService {
             return;
         }
 
+        // 0. Log API endpoint access first
+        emitResourceEvent(userId, "api", "/api/v1/query", "query",
+                null, "execute", traceId, spanId);
+
+        // Track what we've already logged to avoid duplicates (e.g., same catalog accessed twice)
+        Set<String> loggedCatalogs = new HashSet<>();
+        Set<String> loggedBranches = new HashSet<>();
+        Set<String> loggedSchemas = new HashSet<>();
+
         for (QueryTableReference ref : tableReferences) {
-            // Build resource path with full context
-            Map<String, String> path = new HashMap<>();
-            if (ref.getCatalogName() != null) path.put("catalog", ref.getCatalogName());
-            if (ref.getSchemaName() != null) path.put("schema", ref.getSchemaName());
-            if (ref.getBranchName() != null) path.put("branch", ref.getBranchName());
-            if (ref.getColumns() != null && !ref.getColumns().isEmpty()) {
-                path.put("columns", String.join(",", ref.getColumns()));
+            String operation = mapReferenceTypeToOperation(ref.getReferenceType());
+
+            // 1. Log catalog access (once per unique catalog)
+            if (ref.getCatalogName() != null && !loggedCatalogs.contains(ref.getCatalogName())) {
+                loggedCatalogs.add(ref.getCatalogName());
+                emitResourceEvent(userId, "catalog", ref.getCatalogName(), ref.getCatalogName(),
+                        null, operation, traceId, spanId);
             }
 
-            // Build resource ID: catalog/schema/table
-            String resourceId = String.join("/",
+            // 2. Log branch access (once per unique catalog/branch combo)
+            if (ref.getBranchName() != null) {
+                String branchKey = ref.getCatalogName() + "/" + ref.getBranchName();
+                if (!loggedBranches.contains(branchKey)) {
+                    loggedBranches.add(branchKey);
+                    Map<String, String> branchPath = new HashMap<>();
+                    branchPath.put("catalog", ref.getCatalogName());
+                    emitResourceEvent(userId, "branch", branchKey, ref.getBranchName(),
+                            branchPath, operation, traceId, spanId);
+                }
+            }
+
+            // 3. Log schema access (once per unique catalog/schema combo)
+            if (ref.getSchemaName() != null) {
+                String schemaKey = ref.getCatalogName() + "/" + ref.getSchemaName();
+                if (!loggedSchemas.contains(schemaKey)) {
+                    loggedSchemas.add(schemaKey);
+                    Map<String, String> schemaPath = new HashMap<>();
+                    if (ref.getCatalogName() != null) schemaPath.put("catalog", ref.getCatalogName());
+                    if (ref.getBranchName() != null) schemaPath.put("branch", ref.getBranchName());
+                    emitResourceEvent(userId, "schema", schemaKey, ref.getSchemaName(),
+                            schemaPath, operation, traceId, spanId);
+                }
+            }
+
+            // 4. Log table access
+            String tableId = String.join("/",
                     ref.getCatalogName() != null ? ref.getCatalogName() : "",
                     ref.getSchemaName() != null ? ref.getSchemaName() : "",
                     ref.getTableName() != null ? ref.getTableName() : "");
 
-            Resource resource = Resource.builder()
-                    .type("table")
-                    .id(resourceId)
-                    .name(ref.getTableName())
-                    .path(path)
-                    .build();
+            Map<String, String> tablePath = new HashMap<>();
+            if (ref.getCatalogName() != null) tablePath.put("catalog", ref.getCatalogName());
+            if (ref.getSchemaName() != null) tablePath.put("schema", ref.getSchemaName());
+            if (ref.getBranchName() != null) tablePath.put("branch", ref.getBranchName());
+            if (ref.getColumns() != null && !ref.getColumns().isEmpty()) {
+                tablePath.put("columns", String.join(",", ref.getColumns()));
+            }
 
-            // Map reference type to operation
-            String operation = mapReferenceTypeToOperation(ref.getReferenceType());
-
-            AccessEvent event = AccessEvent.builder()
+            AccessEvent tableEvent = AccessEvent.builder()
                     .userId(userId)
-                    .resource(resource)
+                    .resource(Resource.builder()
+                            .type("table")
+                            .id(tableId)
+                            .name(ref.getTableName())
+                            .path(tablePath)
+                            .build())
                     .operation(operation)
                     .status("success")
                     .executionTimeMs(executionTimeMs)
@@ -130,9 +170,30 @@ public class EventService {
                     .traceId(traceId)
                     .spanId(spanId)
                     .build();
-
-            eventEmitter.emit(event);
+            eventEmitter.emit(tableEvent);
         }
+    }
+
+    /**
+     * Helper to emit a resource access event.
+     */
+    private void emitResourceEvent(String userId, String resourceType, String resourceId,
+                                   String resourceName, Map<String, String> path,
+                                   String operation, String traceId, String spanId) {
+        AccessEvent event = AccessEvent.builder()
+                .userId(userId)
+                .resource(Resource.builder()
+                        .type(resourceType)
+                        .id(resourceId)
+                        .name(resourceName)
+                        .path(path)
+                        .build())
+                .operation(operation)
+                .status("success")
+                .traceId(traceId)
+                .spanId(spanId)
+                .build();
+        eventEmitter.emit(event);
     }
 
     private String mapReferenceTypeToOperation(String referenceType) {
