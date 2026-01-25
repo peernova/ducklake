@@ -151,6 +151,19 @@ export const catalogsApi = {
     fetchJson<TableInfo>(
       `${API_BASE}/catalogs/${catalogId}/schemas/${schemaName}/tables/${tableName}${buildQueryString({ branch })}`
     ),
+
+  // Execute DML/DDL statements
+  execute: (
+    catalogId: string,
+    request: { sql: string; branch_name: string }
+  ): Promise<{ success: boolean; rows_affected?: number; message?: string }> =>
+    fetchJson<{ success: boolean; rows_affected?: number; message?: string }>(
+      `${API_BASE}/catalogs/${catalogId}/execute`,
+      {
+        method: 'POST',
+        body: JSON.stringify(request),
+      }
+    ),
 };
 
 // ============================================================================

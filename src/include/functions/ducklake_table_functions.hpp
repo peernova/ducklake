@@ -163,6 +163,11 @@ public:
 	static TableFunction GetFunction();
 };
 
+class DuckLakeCatalogStatsFunction {
+public:
+	static TableFunction GetFunction();
+};
+
 class DuckLakeSearchBranchesFunction {
 public:
 	static TableFunctionSet GetFunctions();
@@ -183,6 +188,16 @@ public:
 	static TableFunctionSet GetFunctions();
 };
 
+class DuckLakeCommonAncestorFunction {
+public:
+	static TableFunction GetFunction();
+};
+
+class DuckLakeBranchChangesSummaryFunction {
+public:
+	static TableFunction GetFunction();
+};
+
 //===--------------------------------------------------------------------===//
 // Query Analysis Functions
 //===--------------------------------------------------------------------===//
@@ -190,6 +205,11 @@ public:
 class DuckLakeAnalyzeQueryFunction {
 public:
 	static TableFunction GetFunction();
+};
+
+class DuckLakeRewriteQueryFunction {
+public:
+	static ScalarFunctionSet GetFunctions();
 };
 
 } // namespace duckdb

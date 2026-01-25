@@ -921,18 +921,27 @@ static void BranchStatsFunction(ClientContext &context, TableFunctionInput &data
 	// This gives accurate row count accounting for deletes
 	// NOTE: This does NOT include inlined data rows. When inlined data is made branch-aware,
 	// update this query to also sum inlined data rows and subtract inlined deletes.
+	// For delete files, we use ROW_NUMBER to pick only the highest-priority delete file
+	// per (data_file_id, data_file_branch_id) - current branch takes priority over ancestors.
 	auto rows_result = transaction.Query(lineage_cte + StringUtil::Format(R"(
 		SELECT
 			COALESCE(SUM(df.record_count), 0) - COALESCE((
-				SELECT SUM(del.delete_count)
-				FROM {METADATA_CATALOG}.ducklake_delete_file del
-				JOIN branch_visibility del_bv ON del.branch_id = del_bv.ancestor_branch_id
-				WHERE del.begin_snapshot <= del_bv.max_visible_snapshot
-				  AND (del.end_snapshot IS NULL OR del.end_snapshot > del_bv.max_visible_snapshot)
-				  AND NOT EXISTS (
-				      SELECT 1 FROM {METADATA_CATALOG}.ducklake_branch_delete_file_deletion dfd
-				      WHERE dfd.branch_id = %lld AND dfd.delete_file_id = del.delete_file_id
-				  )
+				SELECT SUM(delete_count) FROM (
+					SELECT del.delete_count,
+						ROW_NUMBER() OVER (
+							PARTITION BY del.data_file_id, del.data_file_branch_id
+							ORDER BY CASE WHEN del.branch_id = %lld THEN 0 ELSE 1 END,
+							         del_bv.max_visible_snapshot DESC
+						) as rn
+					FROM {METADATA_CATALOG}.ducklake_delete_file del
+					JOIN branch_visibility del_bv ON del.branch_id = del_bv.ancestor_branch_id
+					WHERE del.begin_snapshot <= del_bv.max_visible_snapshot
+					  AND (del.end_snapshot IS NULL OR del.end_snapshot > del_bv.max_visible_snapshot)
+					  AND NOT EXISTS (
+					      SELECT 1 FROM {METADATA_CATALOG}.ducklake_branch_delete_file_deletion dfd
+					      WHERE dfd.branch_id = %lld AND dfd.delete_file_id = del.delete_file_id
+					  )
+				) ranked WHERE rn = 1
 			), 0) AS total_rows,
 			COALESCE(SUM(df.file_size_bytes), 0) AS total_size
 		FROM {METADATA_CATALOG}.ducklake_data_file df
@@ -943,7 +952,7 @@ static void BranchStatsFunction(ClientContext &context, TableFunctionInput &data
 		      SELECT 1 FROM {METADATA_CATALOG}.ducklake_branch_file_deletion fd
 		      WHERE fd.branch_id = %lld AND fd.data_file_id = df.data_file_id
 		  )
-	)", branch_id, branch_id));
+	)", branch_id, branch_id, branch_id));
 	auto rows_chunk = rows_result->Fetch();
 	int64_t total_rows = rows_chunk ? rows_chunk->GetValue(0, 0).GetValue<int64_t>() : 0;
 	int64_t total_size = rows_chunk ? rows_chunk->GetValue(1, 0).GetValue<int64_t>() : 0;
@@ -970,6 +979,148 @@ static void BranchStatsFunction(ClientContext &context, TableFunctionInput &data
 TableFunction DuckLakeBranchStatsFunction::GetFunction() {
 	TableFunction func("ducklake_branch_stats", {LogicalType::VARCHAR, LogicalType::VARCHAR},
 	                   BranchStatsFunction, BranchStatsBind, BranchStatsInit);
+	return func;
+}
+
+//===--------------------------------------------------------------------===//
+// Catalog Stats - Catalog-wide physical stats (not branch-specific)
+//===--------------------------------------------------------------------===//
+struct CatalogStatsBindData : public TableFunctionData {
+	string catalog_name;
+};
+
+struct CatalogStatsState : public GlobalTableFunctionState {
+	CatalogStatsState() : done(false) {}
+	bool done;
+};
+
+static unique_ptr<FunctionData> CatalogStatsBind(ClientContext &context, TableFunctionBindInput &input,
+                                                 vector<LogicalType> &return_types, vector<string> &names) {
+	names.emplace_back("catalog_name");
+	return_types.emplace_back(LogicalType::VARCHAR);
+
+	names.emplace_back("branch_count");
+	return_types.emplace_back(LogicalType::BIGINT);
+
+	names.emplace_back("active_branch_count");
+	return_types.emplace_back(LogicalType::BIGINT);
+
+	names.emplace_back("schema_count");
+	return_types.emplace_back(LogicalType::BIGINT);
+
+	names.emplace_back("table_count");
+	return_types.emplace_back(LogicalType::BIGINT);
+
+	names.emplace_back("view_count");
+	return_types.emplace_back(LogicalType::BIGINT);
+
+	names.emplace_back("data_file_count");
+	return_types.emplace_back(LogicalType::BIGINT);
+
+	names.emplace_back("delete_file_count");
+	return_types.emplace_back(LogicalType::BIGINT);
+
+	names.emplace_back("total_rows");
+	return_types.emplace_back(LogicalType::BIGINT);
+
+	names.emplace_back("total_size_bytes");
+	return_types.emplace_back(LogicalType::BIGINT);
+
+	names.emplace_back("snapshot_count");
+	return_types.emplace_back(LogicalType::BIGINT);
+
+	auto result = make_uniq<CatalogStatsBindData>();
+	result->catalog_name = input.inputs[0].ToString();
+	return std::move(result);
+}
+
+static unique_ptr<GlobalTableFunctionState> CatalogStatsInit(ClientContext &context, TableFunctionInitInput &input) {
+	return make_uniq<CatalogStatsState>();
+}
+
+static void CatalogStatsFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
+	auto &bind_data = data_p.bind_data->Cast<CatalogStatsBindData>();
+	auto &state = data_p.global_state->Cast<CatalogStatsState>();
+
+	if (state.done) {
+		output.SetCardinality(0);
+		return;
+	}
+
+	auto &catalog = BaseMetadataFunction::GetCatalog(context, Value(bind_data.catalog_name));
+	auto &transaction = DuckLakeTransaction::Get(context, catalog);
+
+	// Total branches
+	auto branch_result = transaction.Query("SELECT COUNT(*) FROM {METADATA_CATALOG}.ducklake_branch");
+	auto branch_chunk = branch_result->Fetch();
+	int64_t branch_count = branch_chunk ? branch_chunk->GetValue(0, 0).GetValue<int64_t>() : 0;
+
+	// Active branches
+	auto active_result = transaction.Query(
+	    "SELECT COUNT(*) FROM {METADATA_CATALOG}.ducklake_branch WHERE status = 'active'");
+	auto active_chunk = active_result->Fetch();
+	int64_t active_branch_count = active_chunk ? active_chunk->GetValue(0, 0).GetValue<int64_t>() : 0;
+
+	// Total schemas (all ever created, including deleted ones in metadata)
+	auto schema_result = transaction.Query(
+	    "SELECT COUNT(DISTINCT schema_id) FROM {METADATA_CATALOG}.ducklake_schema");
+	auto schema_chunk = schema_result->Fetch();
+	int64_t schema_count = schema_chunk ? schema_chunk->GetValue(0, 0).GetValue<int64_t>() : 0;
+
+	// Total tables (all ever created)
+	auto table_result = transaction.Query(
+	    "SELECT COUNT(DISTINCT table_id) FROM {METADATA_CATALOG}.ducklake_table");
+	auto table_chunk = table_result->Fetch();
+	int64_t table_count = table_chunk ? table_chunk->GetValue(0, 0).GetValue<int64_t>() : 0;
+
+	// Total views (all ever created)
+	auto view_result = transaction.Query(
+	    "SELECT COUNT(DISTINCT view_id) FROM {METADATA_CATALOG}.ducklake_view");
+	auto view_chunk = view_result->Fetch();
+	int64_t view_count = view_chunk ? view_chunk->GetValue(0, 0).GetValue<int64_t>() : 0;
+
+	// Total data files (physical files on storage)
+	auto data_file_result = transaction.Query(
+	    "SELECT COUNT(*), COALESCE(SUM(record_count), 0), COALESCE(SUM(file_size_bytes), 0) "
+	    "FROM {METADATA_CATALOG}.ducklake_data_file");
+	auto data_file_chunk = data_file_result->Fetch();
+	int64_t data_file_count = data_file_chunk ? data_file_chunk->GetValue(0, 0).GetValue<int64_t>() : 0;
+	int64_t total_rows = data_file_chunk ? data_file_chunk->GetValue(1, 0).GetValue<int64_t>() : 0;
+	int64_t data_size = data_file_chunk ? data_file_chunk->GetValue(2, 0).GetValue<int64_t>() : 0;
+
+	// Total delete files
+	auto delete_file_result = transaction.Query(
+	    "SELECT COUNT(*), COALESCE(SUM(file_size_bytes), 0) FROM {METADATA_CATALOG}.ducklake_delete_file");
+	auto delete_file_chunk = delete_file_result->Fetch();
+	int64_t delete_file_count = delete_file_chunk ? delete_file_chunk->GetValue(0, 0).GetValue<int64_t>() : 0;
+	int64_t delete_size = delete_file_chunk ? delete_file_chunk->GetValue(1, 0).GetValue<int64_t>() : 0;
+
+	int64_t total_size = data_size + delete_size;
+
+	// Total snapshots
+	auto snapshot_result = transaction.Query(
+	    "SELECT COUNT(*) FROM {METADATA_CATALOG}.ducklake_snapshot");
+	auto snapshot_chunk = snapshot_result->Fetch();
+	int64_t snapshot_count = snapshot_chunk ? snapshot_chunk->GetValue(0, 0).GetValue<int64_t>() : 0;
+
+	output.SetValue(0, 0, Value(bind_data.catalog_name));
+	output.SetValue(1, 0, Value::BIGINT(branch_count));
+	output.SetValue(2, 0, Value::BIGINT(active_branch_count));
+	output.SetValue(3, 0, Value::BIGINT(schema_count));
+	output.SetValue(4, 0, Value::BIGINT(table_count));
+	output.SetValue(5, 0, Value::BIGINT(view_count));
+	output.SetValue(6, 0, Value::BIGINT(data_file_count));
+	output.SetValue(7, 0, Value::BIGINT(delete_file_count));
+	output.SetValue(8, 0, Value::BIGINT(total_rows));
+	output.SetValue(9, 0, Value::BIGINT(total_size));
+	output.SetValue(10, 0, Value::BIGINT(snapshot_count));
+	output.SetCardinality(1);
+	state.done = true;
+}
+
+TableFunction DuckLakeCatalogStatsFunction::GetFunction() {
+	TableFunction func("ducklake_catalog_stats", {LogicalType::VARCHAR},
+	                   CatalogStatsFunction, CatalogStatsBind, CatalogStatsInit);
 	return func;
 }
 
@@ -1524,6 +1675,324 @@ TableFunctionSet DuckLakeBranchActivityFunction::GetFunctions() {
 	set.AddFunction(func3);
 
 	return set;
+}
+
+//===--------------------------------------------------------------------===//
+// Common Ancestor - Find LCA between two branches using C++ lineage API
+//===--------------------------------------------------------------------===//
+struct CommonAncestorBindData : public TableFunctionData {
+	string catalog_name;
+	string branch1_name;
+	string branch2_name;
+};
+
+struct CommonAncestorState : public GlobalTableFunctionState {
+	CommonAncestorState() : done(false) {}
+	bool done;
+};
+
+static unique_ptr<FunctionData> CommonAncestorBind(ClientContext &context, TableFunctionBindInput &input,
+                                                    vector<LogicalType> &return_types, vector<string> &names) {
+	names.emplace_back("ancestor_branch_id");
+	return_types.emplace_back(LogicalType::BIGINT);
+
+	names.emplace_back("ancestor_branch_name");
+	return_types.emplace_back(LogicalType::VARCHAR);
+
+	names.emplace_back("common_snapshot_id");
+	return_types.emplace_back(LogicalType::BIGINT);
+
+	names.emplace_back("common_snapshot_time");
+	return_types.emplace_back(LogicalType::TIMESTAMP);
+
+	auto result = make_uniq<CommonAncestorBindData>();
+	result->catalog_name = input.inputs[0].ToString();
+	result->branch1_name = input.inputs[1].ToString();
+	result->branch2_name = input.inputs[2].ToString();
+	return std::move(result);
+}
+
+static unique_ptr<GlobalTableFunctionState> CommonAncestorInit(ClientContext &context, TableFunctionInitInput &input) {
+	return make_uniq<CommonAncestorState>();
+}
+
+static void CommonAncestorFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
+	auto &bind_data = data_p.bind_data->Cast<CommonAncestorBindData>();
+	auto &state = data_p.global_state->Cast<CommonAncestorState>();
+
+	if (state.done) {
+		output.SetCardinality(0);
+		return;
+	}
+
+	auto &catalog = BaseMetadataFunction::GetCatalog(context, Value(bind_data.catalog_name));
+	auto &transaction = DuckLakeTransaction::Get(context, catalog);
+	auto &metadata_manager = transaction.GetMetadataManager();
+	auto &branch_manager = metadata_manager.GetBranchManager();
+
+	// Get branch IDs (GetBranchByName throws if not found)
+	auto branch1 = branch_manager.GetBranchByName(transaction, bind_data.branch1_name);
+	auto branch2 = branch_manager.GetBranchByName(transaction, bind_data.branch2_name);
+
+	// Get lineage for both branches using C++ API
+	auto lineage1 = branch_manager.GetBranchLineage(transaction, branch1.branch_id);
+	auto lineage2 = branch_manager.GetBranchLineage(transaction, branch2.branch_id);
+
+	// Find common ancestor with highest snapshot (most recent common point)
+	idx_t best_ancestor_id = 0;
+	idx_t best_snapshot = 0;
+	bool found = false;
+
+	for (auto &l1 : lineage1) {
+		for (auto &l2 : lineage2) {
+			if (l1.ancestor_branch_id.index == l2.ancestor_branch_id.index) {
+				idx_t common_snap = std::min(l1.max_visible_snapshot, l2.max_visible_snapshot);
+				// Use >= for first match (when !found), then > for subsequent matches
+				if (!found || common_snap > best_snapshot) {
+					best_snapshot = common_snap;
+					best_ancestor_id = l1.ancestor_branch_id.index;
+					found = true;
+				}
+			}
+		}
+	}
+
+	if (!found) {
+		throw InvalidInputException("No common ancestor found between branches '%s' and '%s'",
+		                            bind_data.branch1_name, bind_data.branch2_name);
+	}
+
+	// Get ancestor branch name
+	auto ancestor_branch = branch_manager.GetBranch(transaction, BranchIndex(best_ancestor_id));
+	string ancestor_name = ancestor_branch.branch_name;
+
+	// Get snapshot time from ducklake_snapshot table
+	auto snapshot_result = transaction.Query(StringUtil::Format(
+	    "SELECT snapshot_time FROM {METADATA_CATALOG}.ducklake_snapshot WHERE snapshot_id = %lld",
+	    NumericCast<int64_t>(best_snapshot)));
+	auto snapshot_chunk = snapshot_result->Fetch();
+	Value snapshot_time = snapshot_chunk && snapshot_chunk->size() > 0 ?
+	                      snapshot_chunk->GetValue(0, 0) : Value();
+
+	output.SetValue(0, 0, Value::BIGINT(NumericCast<int64_t>(best_ancestor_id)));
+	output.SetValue(1, 0, Value(ancestor_name));
+	output.SetValue(2, 0, Value::BIGINT(NumericCast<int64_t>(best_snapshot)));
+	output.SetValue(3, 0, snapshot_time);
+	output.SetCardinality(1);
+	state.done = true;
+}
+
+TableFunction DuckLakeCommonAncestorFunction::GetFunction() {
+	TableFunction func("ducklake_common_ancestor",
+	                   {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
+	                   CommonAncestorFunction, CommonAncestorBind, CommonAncestorInit);
+	return func;
+}
+
+//===--------------------------------------------------------------------===//
+// Branch Changes Summary - Aggregated changes with schema/table names
+// Handles different formats:
+//   - inserted_into_table:4 (table_id)
+//   - created_table:"schema"."table"
+//   - created_schema:"schema"
+//===--------------------------------------------------------------------===//
+struct BranchChangesSummaryBindData : public TableFunctionData {
+	string catalog_name;
+	string branch_name;
+	int64_t since_snapshot;
+};
+
+struct BranchChangesSummaryState : public GlobalTableFunctionState {
+	BranchChangesSummaryState() : done(false) {}
+	bool done;
+};
+
+static unique_ptr<FunctionData> BranchChangesSummaryBind(ClientContext &context, TableFunctionBindInput &input,
+                                                          vector<LogicalType> &return_types, vector<string> &names) {
+	names.emplace_back("change_type");
+	return_types.emplace_back(LogicalType::VARCHAR);
+
+	names.emplace_back("schema_name");
+	return_types.emplace_back(LogicalType::VARCHAR);
+
+	names.emplace_back("table_name");
+	return_types.emplace_back(LogicalType::VARCHAR);
+
+	names.emplace_back("change_count");
+	return_types.emplace_back(LogicalType::BIGINT);
+
+	auto result = make_uniq<BranchChangesSummaryBindData>();
+	result->catalog_name = input.inputs[0].ToString();
+	result->branch_name = input.inputs[1].ToString();
+	result->since_snapshot = input.inputs[2].GetValue<int64_t>();
+	return std::move(result);
+}
+
+static unique_ptr<GlobalTableFunctionState> BranchChangesSummaryInit(ClientContext &context, TableFunctionInitInput &input) {
+	return make_uniq<BranchChangesSummaryState>();
+}
+
+static void BranchChangesSummaryFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
+	auto &bind_data = data_p.bind_data->Cast<BranchChangesSummaryBindData>();
+	auto &state = data_p.global_state->Cast<BranchChangesSummaryState>();
+
+	if (state.done) {
+		output.SetCardinality(0);
+		return;
+	}
+
+	auto &catalog = BaseMetadataFunction::GetCatalog(context, Value(bind_data.catalog_name));
+	auto &transaction = DuckLakeTransaction::Get(context, catalog);
+	auto &metadata_manager = transaction.GetMetadataManager();
+	auto &branch_manager = metadata_manager.GetBranchManager();
+
+	// Get branch_id (GetBranchByName throws if not found)
+	auto branch = branch_manager.GetBranchByName(transaction, bind_data.branch_name);
+	int64_t branch_id = NumericCast<int64_t>(branch.branch_id.index);
+
+	// SQL: aggregate changes with CASE to handle different formats
+	// - inserted_into_table, deleted_from_table: table_ref is table_id (integer)
+	// - created_table, dropped_table, altered_table: table_ref is "schema"."table"
+	// - created_schema, dropped_schema: table_ref is schema name
+	auto result = transaction.Query(StringUtil::Format(R"(
+		WITH branch_visibility AS (
+			SELECT ancestor_branch_id, max_visible_snapshot
+			FROM {METADATA_CATALOG}.ducklake_branch_lineage
+			WHERE branch_id = %lld
+		),
+		raw_changes AS (
+			SELECT sc.branch_id as source_branch_id, sc.changes_made
+			FROM {METADATA_CATALOG}.ducklake_snapshot_changes sc
+			JOIN branch_visibility bv ON sc.branch_id = bv.ancestor_branch_id
+			WHERE sc.snapshot_id > %lld
+			  AND sc.snapshot_id <= bv.max_visible_snapshot
+			  AND sc.changes_made IS NOT NULL
+			  AND sc.changes_made != ''
+		),
+		split_changes AS (
+			SELECT source_branch_id, unnest(string_split(changes_made, ',')) as change_entry
+			FROM raw_changes
+		),
+		parsed AS (
+			SELECT
+				source_branch_id,
+				split_part(change_entry, ':', 1) as change_type,
+				regexp_replace(change_entry, '^[^:]+:', '') as table_ref
+			FROM split_changes
+			WHERE change_entry != ''
+		),
+		source_branches AS (
+			SELECT DISTINCT source_branch_id FROM parsed
+		),
+		visible_tables AS (
+			SELECT sb.source_branch_id, t.table_id,
+			       FIRST(t.table_name ORDER BY t.branch_id DESC) as table_name,
+			       FIRST(t.schema_id ORDER BY t.branch_id DESC) as schema_id
+			FROM source_branches sb
+			JOIN {METADATA_CATALOG}.ducklake_branch_lineage bl ON bl.branch_id = sb.source_branch_id
+			JOIN {METADATA_CATALOG}.ducklake_table t ON t.branch_id = bl.ancestor_branch_id AND t.end_snapshot IS NULL
+			GROUP BY sb.source_branch_id, t.table_id
+		),
+		visible_schemas AS (
+			SELECT sb.source_branch_id, s.schema_id,
+			       FIRST(s.schema_name ORDER BY s.branch_id DESC) as schema_name
+			FROM source_branches sb
+			JOIN {METADATA_CATALOG}.ducklake_branch_lineage bl ON bl.branch_id = sb.source_branch_id
+			JOIN {METADATA_CATALOG}.ducklake_schema s ON s.branch_id = bl.ancestor_branch_id AND s.end_snapshot IS NULL
+			GROUP BY sb.source_branch_id, s.schema_id
+		),
+		resolved AS (
+			SELECT
+				p.change_type,
+				CASE
+					-- Data operations: look up via table join
+					WHEN p.change_type IN ('inserted_into_table', 'deleted_from_table',
+					                       'compacted_table', 'inlined_insert',
+					                       'inlined_delete', 'flushed_inlined') THEN
+						vs.schema_name
+					-- dropped_schema: look up schema name by ID
+					WHEN p.change_type = 'dropped_schema' THEN
+						ds.schema_name
+					-- dropped/altered table/view: look up via table join
+					WHEN p.change_type IN ('dropped_table', 'dropped_view', 'altered_table', 'altered_view') THEN
+						dts.schema_name
+					-- created_schema: extract from quoted name
+					WHEN p.change_type = 'created_schema' THEN
+						replace(p.table_ref, '"', '')
+					-- created_table/view/macro: extract schema from "schema"."name"
+					ELSE
+						replace(split_part(p.table_ref, '.', 1), '"', '')
+				END as schema_name,
+				CASE
+					-- Data operations: look up via table join
+					WHEN p.change_type IN ('inserted_into_table', 'deleted_from_table',
+					                       'compacted_table', 'inlined_insert',
+					                       'inlined_delete', 'flushed_inlined') THEN
+						vt.table_name
+					-- Schema operations: no table name
+					WHEN p.change_type IN ('created_schema', 'dropped_schema') THEN
+						NULL
+					-- dropped/altered table/view: look up table name by ID
+					WHEN p.change_type IN ('dropped_table', 'dropped_view', 'altered_table', 'altered_view') THEN
+						dt.table_name
+					-- created_table/view/macro: extract name from "schema"."name"
+					ELSE
+						replace(split_part(p.table_ref, '.', 2), '"', '')
+				END as table_name
+			FROM parsed p
+			-- Join for data operations (insert/delete/compact) - branch-aware lookup
+			LEFT JOIN visible_tables vt
+				ON p.change_type IN ('inserted_into_table', 'deleted_from_table',
+				                     'compacted_table', 'inlined_insert',
+				                     'inlined_delete', 'flushed_inlined')
+				AND p.source_branch_id = vt.source_branch_id
+				AND TRY_CAST(p.table_ref AS BIGINT) = vt.table_id
+			LEFT JOIN visible_schemas vs
+				ON vt.source_branch_id = vs.source_branch_id
+				AND vt.schema_id = vs.schema_id
+			-- Join for dropped_schema - branch-aware lookup
+			LEFT JOIN visible_schemas ds
+				ON p.change_type = 'dropped_schema'
+				AND p.source_branch_id = ds.source_branch_id
+				AND TRY_CAST(p.table_ref AS BIGINT) = ds.schema_id
+			-- Join for dropped/altered table/view - branch-aware lookup
+			LEFT JOIN visible_tables dt
+				ON p.change_type IN ('dropped_table', 'dropped_view', 'altered_table', 'altered_view')
+				AND p.source_branch_id = dt.source_branch_id
+				AND TRY_CAST(p.table_ref AS BIGINT) = dt.table_id
+			LEFT JOIN visible_schemas dts
+				ON dt.source_branch_id = dts.source_branch_id
+				AND dt.schema_id = dts.schema_id
+		)
+		SELECT change_type, schema_name, table_name, COUNT(*) as change_count
+		FROM resolved
+		GROUP BY change_type, schema_name, table_name
+		ORDER BY change_count DESC
+	)", branch_id, bind_data.since_snapshot));
+
+	idx_t count = 0;
+	while (count < STANDARD_VECTOR_SIZE) {
+		auto chunk = result->Fetch();
+		if (!chunk || chunk->size() == 0) {
+			break;
+		}
+		for (idx_t i = 0; i < chunk->size() && count < STANDARD_VECTOR_SIZE; i++) {
+			output.SetValue(0, count, chunk->GetValue(0, i));  // change_type
+			output.SetValue(1, count, chunk->GetValue(1, i));  // schema_name
+			output.SetValue(2, count, chunk->GetValue(2, i));  // table_name
+			output.SetValue(3, count, chunk->GetValue(3, i));  // change_count
+			count++;
+		}
+	}
+	output.SetCardinality(count);
+	state.done = true;
+}
+
+TableFunction DuckLakeBranchChangesSummaryFunction::GetFunction() {
+	TableFunction func("ducklake_branch_changes_summary",
+	                   {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::BIGINT},
+	                   BranchChangesSummaryFunction, BranchChangesSummaryBind, BranchChangesSummaryInit);
+	return func;
 }
 
 } // namespace duckdb

@@ -675,6 +675,80 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /catalogs/{catalog_id}/branches/changes:
+    get:
+      tags: [Branches]
+      summary: Get branch changes summary
+      description: |
+        Returns a summary of changes between two branches relative to their common ancestor (LCA).
+        This endpoint finds the lowest common ancestor snapshot between the two branches and
+        summarizes all changes made on each branch since that point.
+
+        Useful for understanding what each branch has changed before a merge operation.
+      operationId: getBranchChanges
+      parameters:
+        - $ref: '#/components/parameters/CatalogId'
+        - name: base_branch
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Base branch name for comparison
+          example: main
+        - name: compare_branch
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Branch to compare against base
+          example: feature/new-model
+      responses:
+        '200':
+          description: Branch changes summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BranchChangesResponse'
+              example:
+                common_ancestor:
+                  branch_name: main
+                  snapshot_id: 5
+                  snapshot_time: "2024-01-15T10:30:00Z"
+                base_branch_summary:
+                  total_changes: 3
+                  summaries:
+                    - change_type: created_table
+                      schema_name: trading
+                      table_name: executions
+                      change_count: 2
+                    - change_type: altered_table
+                      schema_name: trading
+                      table_name: orders
+                      change_count: 1
+                compare_branch_summary:
+                  total_changes: 5
+                  summaries:
+                    - change_type: created_schema
+                      schema_name: analytics
+                      table_name: null
+                      change_count: 1
+                    - change_type: created_table
+                      schema_name: analytics
+                      table_name: daily_pnl
+                      change_count: 2
+                    - change_type: dropped_table
+                      schema_name: ref
+                      table_name: symbols
+                      change_count: 1
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
   /catalogs/{catalog_id}/branches/merge:
     post:
       tags: [Branches]
@@ -1442,6 +1516,78 @@ components:
             columns_added: { type: integer }
             columns_removed: { type: integer }
             columns_modified: { type: integer }
+
+    # --------------------------------------------------------------------------
+    # Branch Changes Summary
+    # --------------------------------------------------------------------------
+    CommonAncestor:
+      type: object
+      description: Information about the common ancestor (LCA) between two branches
+      properties:
+        branch_name:
+          type: string
+          description: Name of the branch where the common ancestor snapshot exists
+        snapshot_id:
+          type: integer
+          description: Snapshot ID of the common ancestor
+        snapshot_time:
+          type: string
+          format: date-time
+          description: Timestamp when the common ancestor snapshot was created
+
+    ChangeSummaryItem:
+      type: object
+      description: Summary of a specific type of change on a schema/table
+      properties:
+        change_type:
+          type: string
+          description: Type of change
+          enum:
+            - created_schema
+            - dropped_schema
+            - created_table
+            - dropped_table
+            - altered_table
+            - created_view
+            - dropped_view
+            - altered_view
+            - data_insert
+            - data_delete
+        schema_name:
+          type: string
+          nullable: true
+          description: Name of the schema affected
+        table_name:
+          type: string
+          nullable: true
+          description: Name of the table affected (null for schema-level changes)
+        change_count:
+          type: integer
+          description: Number of changes of this type
+
+    BranchSummary:
+      type: object
+      description: Summary of all changes on a branch since the common ancestor
+      properties:
+        total_changes:
+          type: integer
+          description: Total number of changes on this branch
+        summaries:
+          type: array
+          description: Breakdown of changes by type and object
+          items:
+            $ref: '#/components/schemas/ChangeSummaryItem'
+
+    BranchChangesResponse:
+      type: object
+      description: Response containing branch changes comparison relative to common ancestor
+      properties:
+        common_ancestor:
+          $ref: '#/components/schemas/CommonAncestor'
+        base_branch_summary:
+          $ref: '#/components/schemas/BranchSummary'
+        compare_branch_summary:
+          $ref: '#/components/schemas/BranchSummary'
 
     # --------------------------------------------------------------------------
     # Schema & Table

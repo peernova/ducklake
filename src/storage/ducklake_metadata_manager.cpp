@@ -130,6 +130,50 @@ CREATE INDEX idx_schema_branch ON {METADATA_CATALOG}.ducklake_schema(branch_id, 
 CREATE INDEX idx_table_branch ON {METADATA_CATALOG}.ducklake_table(branch_id, table_id, begin_snapshot);
 CREATE INDEX idx_column_branch ON {METADATA_CATALOG}.ducklake_column(branch_id, table_id, begin_snapshot);
 
+-- Branch lineage indexes (critical for all branch-aware queries)
+CREATE INDEX idx_branch_lineage_ancestor ON {METADATA_CATALOG}.ducklake_branch_lineage(ancestor_branch_id, branch_id);
+
+-- Branch deletion tracking indexes (for NOT EXISTS anti-joins)
+CREATE INDEX idx_branch_file_del ON {METADATA_CATALOG}.ducklake_branch_file_deletion(ancestor_branch_id, data_file_id, branch_id);
+CREATE INDEX idx_branch_del_file_del ON {METADATA_CATALOG}.ducklake_branch_delete_file_deletion(ancestor_branch_id, delete_file_id, branch_id);
+CREATE INDEX idx_branch_table_del ON {METADATA_CATALOG}.ducklake_branch_table_deletion(ancestor_branch_id, table_id, branch_id);
+CREATE INDEX idx_branch_schema_del ON {METADATA_CATALOG}.ducklake_branch_schema_deletion(ancestor_branch_id, schema_id, branch_id);
+CREATE INDEX idx_branch_view_del ON {METADATA_CATALOG}.ducklake_branch_view_deletion(ancestor_branch_id, view_id, branch_id);
+CREATE INDEX idx_branch_macro_del ON {METADATA_CATALOG}.ducklake_branch_macro_deletion(ancestor_branch_id, macro_id, branch_id);
+CREATE INDEX idx_branch_column_del ON {METADATA_CATALOG}.ducklake_branch_column_deletion(ancestor_branch_id, table_id, column_id, branch_id);
+CREATE INDEX idx_branch_partition_del ON {METADATA_CATALOG}.ducklake_branch_partition_deletion(ancestor_branch_id, partition_id, branch_id);
+
+-- Delete file lookups (for join on data_file_id)
+CREATE INDEX idx_deletefile_datafile ON {METADATA_CATALOG}.ducklake_delete_file(data_file_id, data_file_branch_id, branch_id);
+
+-- File stats and partition value indexes
+CREATE INDEX idx_file_col_stats ON {METADATA_CATALOG}.ducklake_file_column_stats(branch_id, data_file_id, table_id);
+CREATE INDEX idx_file_partition_val ON {METADATA_CATALOG}.ducklake_file_partition_value(branch_id, data_file_id, table_id);
+
+-- Tag indexes
+CREATE INDEX idx_tag_object ON {METADATA_CATALOG}.ducklake_tag(object_id, branch_id);
+CREATE INDEX idx_column_tag ON {METADATA_CATALOG}.ducklake_column_tag(table_id, column_id, branch_id);
+
+-- Table/column stats indexes
+CREATE INDEX idx_table_stats ON {METADATA_CATALOG}.ducklake_table_stats(branch_id, table_id);
+CREATE INDEX idx_table_col_stats ON {METADATA_CATALOG}.ducklake_table_column_stats(branch_id, table_id, column_id);
+
+-- Partition info indexes
+CREATE INDEX idx_partition_info ON {METADATA_CATALOG}.ducklake_partition_info(branch_id, table_id);
+CREATE INDEX idx_partition_col ON {METADATA_CATALOG}.ducklake_partition_column(branch_id, partition_id, table_id);
+
+-- View index
+CREATE INDEX idx_view_branch ON {METADATA_CATALOG}.ducklake_view(branch_id, schema_id, begin_snapshot);
+
+-- Macro indexes
+CREATE INDEX idx_macro_branch ON {METADATA_CATALOG}.ducklake_macro(branch_id, schema_id);
+CREATE INDEX idx_macro_impl ON {METADATA_CATALOG}.ducklake_macro_impl(branch_id, macro_id);
+CREATE INDEX idx_macro_params ON {METADATA_CATALOG}.ducklake_macro_parameters(branch_id, macro_id);
+
+-- Column mapping indexes
+CREATE INDEX idx_col_mapping ON {METADATA_CATALOG}.ducklake_column_mapping(branch_id, mapping_id, table_id);
+CREATE INDEX idx_name_mapping ON {METADATA_CATALOG}.ducklake_name_mapping(branch_id, mapping_id);
+
 -- Initialize main branch (branch_id=0) with snapshot 0
 INSERT INTO {METADATA_CATALOG}.ducklake_branch VALUES (0, 'main', NULL, NULL, 0, 0, NOW(), 'active');
 INSERT INTO {METADATA_CATALOG}.ducklake_branch_lineage VALUES (0, 0, 9223372036854775807);
