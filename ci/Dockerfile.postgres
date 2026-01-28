@@ -22,8 +22,8 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Copy the duckdb-postgres source
-COPY . .
+# Clone the duckdb-postgres repository
+RUN git clone https://github.com/duckdb/duckdb-postgres.git .
 
 # Initialize and update git submodules
 RUN git submodule update --init --recursive

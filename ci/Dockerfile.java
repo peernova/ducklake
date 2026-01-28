@@ -25,9 +25,12 @@ ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
 
 WORKDIR /workspace
 
-# Copy cloned repositories from build-repos directory
-COPY build-repos/duckdb-java/ ./duckdb-java/
-COPY build-repos/duckdb/ ./duckdb/
+# Clone required repositories directly in the container
+RUN git clone https://github.com/duckdb/duckdb-java.git && \
+    git clone https://github.com/peernova/duckdb.git
+
+# Checkout specific branch for duckdb
+RUN cd duckdb && git checkout feature/branching && git pull
 
 # Build duckdb-java with custom duckdb
 WORKDIR /workspace/duckdb-java

@@ -3,6 +3,10 @@ pipeline {
       label 'jenkins-titanium-slave-ecs-ec2'
     }
 
+    options {
+      skipDefaultCheckout()
+    }
+
     parameters {
         choice(
             name: 'BUILD_TARGET',
@@ -33,8 +37,8 @@ pipeline {
         BUILD_VERSION = "${env.BUILD_NUMBER}-${env.GIT_COMMIT?.take(7) ?: 'unknown'}"
         BUILD_TIMESTAMP = "${new Date().format('yyyyMMdd-HHmmss')}"
         AWS_DEFAULT_REGION = "us-west-1"
-        AWS_ACCESS_KEY_ID = credentials("${CREDENTIAL_ID}_AWS_ACCESS_KEY_ID")
-        AWS_SECRET_ACCESS_KEY = credentials("${CREDENTIAL_ID}_AWS_SECRET_ACCESS_KEY")
+        AWS_ACCESS_KEY_ID = credentials('PN_AWS_ACCESS_KEY_ID')
+        AWS_SECRET_ACCESS_KEY = credentials('PN_AWS_SECRET_ACCESS_KEY')
     }
 
     stages {
@@ -50,22 +54,6 @@ pipeline {
                         script: 'git rev-parse --abbrev-ref HEAD',
                         returnStdout: true
                     ).trim()
-
-                    // Clone additional repositories for building (ducklake is already checked out)
-                    sh '''
-                        # Clean any existing clones
-                        rm -rf build-repos
-                        mkdir -p build-repos
-
-                        # Clone required repositories
-                        cd build-repos
-                        git clone https://github.com/duckdb/duckdb-postgres.git  
-                        git clone https://github.com/duckdb/duckdb-java.git
-                        git clone https://github.com/peernova/duckdb.git
-
-                        # Checkout specific branch for duckdb
-                        cd duckdb && git checkout feature/branching && git pull && cd ..
-                    '''
                 }
             }
         }
@@ -157,21 +145,21 @@ pipeline {
 
     post {
         always {
-            script {
-                // Clean up Docker images and artifacts
-                sh """
-                    docker images --filter=reference='*-build:*' -q | xargs -r docker rmi || true
-                    docker system prune -f || true
-                    rm -rf artifacts-* || true
-                """
-            }
+            // Clean up Docker images and artifacts
+            sh """
+                docker images --filter=reference='*-build:*' -q | xargs -r docker rmi || true
+                docker system prune -f || true
+                rm -rf artifacts-* || true
+            """
         }
 
         success {
             echo "✅ All selected components built and uploaded successfully!"
             script {
-                def buildSummary = readFile('build-summary.txt')
-                currentBuild.description = buildSummary
+                if (fileExists('build-summary.txt')) {
+                    def buildSummary = readFile('build-summary.txt')
+                    currentBuild.description = buildSummary
+                }
             }
         }
 
@@ -219,10 +207,9 @@ def buildDuckDBPostgres() {
     def artifactName = "postgres_scanner-${BUILD_VERSION}.duckdb_extension"
 
     try {
-        // Build Docker image from cloned postgres directory
+        // Build Docker image (repository is cloned inside the container)
         sh """
-            cd build-repos/duckdb-postgres
-            docker build -f ../../ci/Dockerfile.postgres -t ${dockerImage}:${BUILD_VERSION} .
+            docker build -f ci/Dockerfile.postgres -t ${dockerImage}:${BUILD_VERSION} .
         """
 
         // Extract extension
@@ -251,7 +238,7 @@ def buildDuckDBJava() {
     def artifactName = "duckdb_jdbc-${BUILD_VERSION}.jar"
 
     try {
-        // Build Docker image with both java and duckdb repos
+        // Build Docker image (repositories are cloned inside the container)
         sh """
             docker build -f ci/Dockerfile.java -t ${dockerImage}:${BUILD_VERSION} .
         """
