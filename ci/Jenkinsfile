@@ -1,0 +1,372 @@
+pipeline {
+    agent {
+      label 'jenkins-titanium-slave-ecs-ec2'
+    }
+
+    parameters {
+        choice(
+            name: 'BUILD_TARGET',
+            choices: ['all', 'ducklake', 'postgres', 'java'],
+            description: 'Which components to build'
+        )
+        string(
+            name: 'S3_BUCKET_OVERRIDE',
+            defaultValue: '',
+            description: 'Override S3 bucket (optional)'
+        )
+        string(
+            name: 'S3_PREFIX_OVERRIDE',
+            defaultValue: '',
+            description: 'Override S3 prefix (optional)'
+        )
+        booleanParam(
+            name: 'PARALLEL_BUILD',
+            defaultValue: true,
+            description: 'Build components in parallel (faster but uses more resources)'
+        )
+    }
+
+    environment {
+        S3_BUCKET = "${params.S3_BUCKET_OVERRIDE ?: env.S3_BUCKET ?: 'your-bucket-name'}"
+        S3_PREFIX = "${params.S3_PREFIX_OVERRIDE ?: env.S3_PREFIX ?: 'duckdb-artifacts'}"
+        AWS_REGION = "${env.AWS_REGION ?: 'us-east-1'}"
+        BUILD_VERSION = "${env.BUILD_NUMBER}-${env.GIT_COMMIT?.take(7) ?: 'unknown'}"
+        BUILD_TIMESTAMP = "${new Date().format('yyyyMMdd-HHmmss')}"
+        AWS_DEFAULT_REGION = "us-west-1"
+        AWS_ACCESS_KEY_ID = credentials("${CREDENTIAL_ID}_AWS_ACCESS_KEY_ID")
+        AWS_SECRET_ACCESS_KEY = credentials("${CREDENTIAL_ID}_AWS_SECRET_ACCESS_KEY")
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+                script {
+                    env.GIT_COMMIT = sh(
+                        script: 'git rev-parse HEAD',
+                        returnStdout: true
+                    ).trim()
+                    env.GIT_BRANCH = sh(
+                        script: 'git rev-parse --abbrev-ref HEAD',
+                        returnStdout: true
+                    ).trim()
+
+                    // Clone additional repositories for building (ducklake is already checked out)
+                    sh '''
+                        # Clean any existing clones
+                        rm -rf build-repos
+                        mkdir -p build-repos
+
+                        # Clone required repositories
+                        cd build-repos
+                        git clone https://github.com/duckdb/duckdb-postgres.git  
+                        git clone https://github.com/duckdb/duckdb-java.git
+                        git clone https://github.com/peernova/duckdb.git
+
+                        # Checkout specific branch for duckdb
+                        cd duckdb && git checkout feature/branching && git pull && cd ..
+                    '''
+                }
+            }
+        }
+
+        stage('Build Components') {
+            when {
+                expression { params.PARALLEL_BUILD }
+            }
+            parallel {
+                stage('Build DuckLake') {
+                    when {
+                        anyOf {
+                            expression { params.BUILD_TARGET == 'all' }
+                            expression { params.BUILD_TARGET == 'ducklake' }
+                        }
+                    }
+                    steps {
+                        script {
+                            buildDuckLake()
+                        }
+                    }
+                }
+
+                stage('Build DuckDB Postgres') {
+                    when {
+                        anyOf {
+                            expression { params.BUILD_TARGET == 'all' }
+                            expression { params.BUILD_TARGET == 'postgres' }
+                        }
+                    }
+                    steps {
+                        script {
+                            buildDuckDBPostgres()
+                        }
+                    }
+                }
+
+                stage('Build DuckDB Java') {
+                    when {
+                        anyOf {
+                            expression { params.BUILD_TARGET == 'all' }
+                            expression { params.BUILD_TARGET == 'java' }
+                        }
+                    }
+                    steps {
+                        script {
+                            buildDuckDBJava()
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Build Components Sequential') {
+            when {
+                expression { !params.PARALLEL_BUILD }
+            }
+            steps {
+                script {
+                    if (params.BUILD_TARGET == 'all' || params.BUILD_TARGET == 'ducklake') {
+                        buildDuckLake()
+                    }
+                    if (params.BUILD_TARGET == 'all' || params.BUILD_TARGET == 'postgres') {
+                        buildDuckDBPostgres()
+                    }
+                    if (params.BUILD_TARGET == 'all' || params.BUILD_TARGET == 'java') {
+                        buildDuckDBJava()
+                    }
+                }
+            }
+        }
+
+        stage('Upload Artifacts') {
+            steps {
+                script {
+                    uploadArtifacts()
+                }
+            }
+        }
+
+        stage('Generate Build Report') {
+            steps {
+                script {
+                    generateBuildReport()
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            script {
+                // Clean up Docker images and artifacts
+                sh """
+                    docker images --filter=reference='*-build:*' -q | xargs -r docker rmi || true
+                    docker system prune -f || true
+                    rm -rf artifacts-* || true
+                """
+            }
+        }
+
+        success {
+            echo "✅ All selected components built and uploaded successfully!"
+            script {
+                def buildSummary = readFile('build-summary.txt')
+                currentBuild.description = buildSummary
+            }
+        }
+
+        failure {
+            echo "❌ Pipeline failed. Check the logs above for details."
+        }
+    }
+}
+
+def buildDuckLake() {
+    echo "🚀 Building DuckLake extension..."
+
+    def dockerImage = "ducklake-build"
+    def artifactName = "ducklake-${BUILD_VERSION}.duckdb_extension"
+
+    try {
+        // Build Docker image from current directory (ducklake repo)
+        sh """
+            docker build -f ci/Dockerfile.ducklake -t ${dockerImage}:${BUILD_VERSION} .
+        """
+
+        // Extract extension
+        sh """
+            mkdir -p artifacts-ducklake
+            CONTAINER_ID=\$(docker create ${dockerImage}:${BUILD_VERSION})
+            docker cp \$CONTAINER_ID:/app/build/release/extension/ducklake/ducklake.duckdb_extension artifacts-ducklake/${artifactName}
+            docker rm \$CONTAINER_ID
+            ls -la artifacts-ducklake/${artifactName}
+        """
+
+        echo "✅ DuckLake extension built successfully!"
+
+    } catch (Exception e) {
+        echo "❌ Failed to build DuckLake: ${e.getMessage()}"
+        throw e
+    } finally {
+        sh "docker rmi ${dockerImage}:${BUILD_VERSION} || true"
+    }
+}
+
+def buildDuckDBPostgres() {
+    echo "🚀 Building DuckDB Postgres extension..."
+
+    def dockerImage = "duckdb-postgres-build"
+    def artifactName = "postgres_scanner-${BUILD_VERSION}.duckdb_extension"
+
+    try {
+        // Build Docker image from cloned postgres directory
+        sh """
+            cd build-repos/duckdb-postgres
+            docker build -f ../../ci/Dockerfile.postgres -t ${dockerImage}:${BUILD_VERSION} .
+        """
+
+        // Extract extension
+        sh """
+            mkdir -p artifacts-postgres
+            CONTAINER_ID=\$(docker create ${dockerImage}:${BUILD_VERSION})
+            docker cp \$CONTAINER_ID:/app/build/release/extension/postgres_scanner/postgres_scanner.duckdb_extension artifacts-postgres/${artifactName}
+            docker rm \$CONTAINER_ID
+            ls -la artifacts-postgres/${artifactName}
+        """
+
+        echo "✅ DuckDB Postgres extension built successfully!"
+
+    } catch (Exception e) {
+        echo "❌ Failed to build DuckDB Postgres: ${e.getMessage()}"
+        throw e
+    } finally {
+        sh "docker rmi ${dockerImage}:${BUILD_VERSION} || true"
+    }
+}
+
+def buildDuckDBJava() {
+    echo "🚀 Building DuckDB Java..."
+
+    def dockerImage = "duckdb-java-build"
+    def artifactName = "duckdb_jdbc-${BUILD_VERSION}.jar"
+
+    try {
+        // Build Docker image with both java and duckdb repos
+        sh """
+            docker build -f ci/Dockerfile.java -t ${dockerImage}:${BUILD_VERSION} .
+        """
+
+        // Extract JAR
+        sh """
+            mkdir -p artifacts-java
+            CONTAINER_ID=\$(docker create ${dockerImage}:${BUILD_VERSION})
+            docker cp \$CONTAINER_ID:/workspace/duckdb-java/build/release/duckdb_jdbc.jar artifacts-java/${artifactName}
+            docker rm \$CONTAINER_ID
+            ls -la artifacts-java/${artifactName}
+        """
+
+        echo "✅ DuckDB Java built successfully!"
+
+    } catch (Exception e) {
+        echo "❌ Failed to build DuckDB Java: ${e.getMessage()}"
+        throw e
+    } finally {
+        sh "docker rmi ${dockerImage}:${BUILD_VERSION} || true"
+    }
+}
+
+def uploadArtifacts() {
+    echo "☁️ Uploading artifacts to S3..."
+
+    def uploadedFiles = []
+
+    // Upload DuckLake if exists
+    if (fileExists('artifacts-ducklake')) {
+        sh """
+            for file in artifacts-ducklake/*; do
+                if [ -f "\$file" ]; then
+                    filename=\$(basename "\$file")
+                    aws s3 cp "\$file" s3://${S3_BUCKET}/${S3_PREFIX}/extensions/\$filename \\
+                        --region ${AWS_REGION} \\
+                        --metadata "component=ducklake,build-number=${BUILD_NUMBER},git-commit=${GIT_COMMIT},git-branch=${GIT_BRANCH}" \\
+                        --content-type "application/octet-stream"
+
+                    # Also upload as latest
+                    aws s3 cp "\$file" s3://${S3_BUCKET}/${S3_PREFIX}/extensions/ducklake-latest.duckdb_extension \\
+                        --region ${AWS_REGION} \\
+                        --metadata "component=ducklake,build-number=${BUILD_NUMBER},git-commit=${GIT_COMMIT},git-branch=${GIT_BRANCH}" \\
+                        --content-type "application/octet-stream"
+                fi
+            done
+        """
+        uploadedFiles.add("DuckLake extension")
+    }
+
+    // Upload Postgres if exists
+    if (fileExists('artifacts-postgres')) {
+        sh """
+            for file in artifacts-postgres/*; do
+                if [ -f "\$file" ]; then
+                    filename=\$(basename "\$file")
+                    aws s3 cp "\$file" s3://${S3_BUCKET}/${S3_PREFIX}/extensions/\$filename \\
+                        --region ${AWS_REGION} \\
+                        --metadata "component=postgres_scanner,build-number=${BUILD_NUMBER},git-commit=${GIT_COMMIT},git-branch=${GIT_BRANCH}" \\
+                        --content-type "application/octet-stream"
+
+                    # Also upload as latest
+                    aws s3 cp "\$file" s3://${S3_BUCKET}/${S3_PREFIX}/extensions/postgres_scanner-latest.duckdb_extension \\
+                        --region ${AWS_REGION} \\
+                        --metadata "component=postgres_scanner,build-number=${BUILD_NUMBER},git-commit=${GIT_COMMIT},git-branch=${GIT_BRANCH}" \\
+                        --content-type "application/octet-stream"
+                fi
+            done
+        """
+        uploadedFiles.add("Postgres Scanner extension")
+    }
+
+    // Upload Java if exists
+    if (fileExists('artifacts-java')) {
+        sh """
+            for file in artifacts-java/*; do
+                if [ -f "\$file" ]; then
+                    filename=\$(basename "\$file")
+                    aws s3 cp "\$file" s3://${S3_BUCKET}/${S3_PREFIX}/java/\$filename \\
+                        --region ${AWS_REGION} \\
+                        --metadata "component=duckdb_jdbc,build-number=${BUILD_NUMBER},git-commit=${GIT_COMMIT},git-branch=${GIT_BRANCH}" \\
+                        --content-type "application/java-archive"
+
+                    # Also upload as latest
+                    aws s3 cp "\$file" s3://${S3_BUCKET}/${S3_PREFIX}/java/duckdb_jdbc-latest.jar \\
+                        --region ${AWS_REGION} \\
+                        --metadata "component=duckdb_jdbc,build-number=${BUILD_NUMBER},git-commit=${GIT_COMMIT},git-branch=${GIT_BRANCH}" \\
+                        --content-type "application/java-archive"
+                fi
+            done
+        """
+        uploadedFiles.add("DuckDB JDBC JAR")
+    }
+
+    echo "✅ Uploaded: ${uploadedFiles.join(', ')}"
+}
+
+def generateBuildReport() {
+    def report = """Build Summary - ${BUILD_TIMESTAMP}
+Build: #${BUILD_NUMBER}
+Git: ${GIT_COMMIT} (${GIT_BRANCH})
+S3: s3://${S3_BUCKET}/${S3_PREFIX}/
+
+Artifacts:"""
+
+    if (fileExists('artifacts-ducklake')) {
+        report += "\n• DuckLake: s3://${S3_BUCKET}/${S3_PREFIX}/extensions/ducklake-${BUILD_VERSION}.duckdb_extension"
+    }
+    if (fileExists('artifacts-postgres')) {
+        report += "\n• Postgres: s3://${S3_BUCKET}/${S3_PREFIX}/extensions/postgres_scanner-${BUILD_VERSION}.duckdb_extension"
+    }
+    if (fileExists('artifacts-java')) {
+        report += "\n• Java JDBC: s3://${S3_BUCKET}/${S3_PREFIX}/java/duckdb_jdbc-${BUILD_VERSION}.jar"
+    }
+
+    writeFile file: 'build-summary.txt', text: report
+    echo report
+}

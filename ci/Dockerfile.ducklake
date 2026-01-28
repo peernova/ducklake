@@ -1,0 +1,59 @@
+# DuckLake Extension Build
+FROM ubuntu:22.04
+
+# Set environment variables to avoid interactive prompts
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=UTC
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    ninja-build \
+    git \
+    python3 \
+    python3-pip \
+    curl \
+    wget \
+    pkg-config \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /app
+
+# Copy the entire project (from parent directory)
+COPY . .
+
+# Initialize and update git submodules (for DuckDB and extension-ci-tools)
+RUN git submodule update --init --recursive
+
+# Clean any existing build artifacts and cache to avoid path conflicts
+RUN rm -rf build/ && \
+    find . -name "CMakeCache.txt" -delete && \
+    find . -name "cmake_install.cmake" -delete && \
+    find . -name "*.ninja" -delete && \
+    find . -name ".ninja_*" -delete && \
+    find . -name "CMakeFiles" -type d -exec rm -rf {} + 2>/dev/null || true
+
+# Set environment variable for ninja generator
+ENV GEN=ninja
+
+# Build the extension
+RUN make
+
+# Optional: Create a runtime stage for smaller final image
+FROM ubuntu:22.04 as runtime
+
+# Install minimal runtime dependencies
+RUN apt-get update && apt-get install -y \
+    libssl3 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy built artifacts from build stage
+COPY --from=0 /app/build /app/build
+
+WORKDIR /app
+
+# Set default command
+CMD ["bash"]

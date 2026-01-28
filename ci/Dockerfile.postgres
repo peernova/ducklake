@@ -1,0 +1,37 @@
+# DuckDB Postgres Scanner Extension Build
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=UTC
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    ninja-build \
+    git \
+    python3 \
+    python3-pip \
+    curl \
+    wget \
+    pkg-config \
+    libssl-dev \
+    libpq-dev \
+    postgresql-server-dev-all \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy the duckdb-postgres source
+COPY . .
+
+# Initialize and update git submodules
+RUN git submodule update --init --recursive
+
+# Set environment variable for ninja generator
+ENV GEN=ninja
+
+# Build the extension
+RUN make
+
+CMD ["bash"]

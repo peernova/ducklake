@@ -1,8 +1,8 @@
 [submodule "duckdb"]
 	path = duckdb
-	url = https://github.com/duckdb/duckdb
-	branch = main
+	url = https://github.com/peernova/duckdb.git
+	branch = feature/branching
 [submodule "extension-ci-tools"]
 	path = extension-ci-tools
-	url = https://github.com/duckdb/extension-ci-tools
-	branch = main
+	url = https://github.com/peernova/extension-ci-tools.git
+	branch = feature/branching
