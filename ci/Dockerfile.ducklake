@@ -1,11 +1,11 @@
-# DuckLake Extension Build
+# DuckLake Extension Build - Match macOS Clang Environment
 FROM ubuntu:22.04
 
 # Set environment variables to avoid interactive prompts
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=UTC
 
-# Install system dependencies
+# Install system dependencies including Clang (to match your macOS environment)
 RUN apt-get update && apt-get install -y \
     build-essential \
     cmake \
@@ -17,18 +17,21 @@ RUN apt-get update && apt-get install -y \
     wget \
     pkg-config \
     libssl-dev \
+    clang-15 \
+    libc++-15-dev \
+    libc++abi-15-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
 WORKDIR /app
 
-# Copy the entire project (from parent directory)
+# Copy the entire project
 COPY . .
 
-# Initialize and update git submodules (for DuckDB and extension-ci-tools)
+# Initialize and update git submodules
 RUN git submodule update --init --recursive
 
-# Clean any existing build artifacts and cache to avoid path conflicts
+# Clean any existing build artifacts
 RUN rm -rf build/ && \
     find . -name "CMakeCache.txt" -delete && \
     find . -name "cmake_install.cmake" -delete && \
@@ -36,10 +39,13 @@ RUN rm -rf build/ && \
     find . -name ".ninja_*" -delete && \
     find . -name "CMakeFiles" -type d -exec rm -rf {} + 2>/dev/null || true
 
-# Set environment variable for ninja generator
+# Set environment variables to use Clang (like your macOS)
 ENV GEN=ninja
+ENV CC=clang-15
+ENV CXX=clang++-15
+ENV CMAKE_CXX_STANDARD=17
 
-# Build the extension
+# Build the extension using Clang to match your local environment
 RUN make
 
 # Optional: Create a runtime stage for smaller final image

@@ -34,7 +34,6 @@ pipeline {
         S3_BUCKET = "${params.S3_BUCKET_OVERRIDE ?: env.S3_BUCKET ?: 'your-bucket-name'}"
         S3_PREFIX = "${params.S3_PREFIX_OVERRIDE ?: env.S3_PREFIX ?: 'duckdb-artifacts'}"
         AWS_REGION = "${env.AWS_REGION ?: 'us-east-1'}"
-        BUILD_VERSION = "${env.BUILD_NUMBER}-${env.GIT_COMMIT?.take(7) ?: 'unknown'}"
         BUILD_TIMESTAMP = "${new Date().format('yyyyMMdd-HHmmss')}"
         AWS_DEFAULT_REGION = "us-west-1"
         AWS_ACCESS_KEY_ID = credentials('PN_AWS_ACCESS_KEY_ID')
