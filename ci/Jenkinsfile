@@ -135,7 +135,7 @@ def buildDuckLake() {
         // Build Docker image (repository is cloned inside the container)
         // We can build from any directory since Dockerfile does git clone
         sh """
-            docker build -f ci/Dockerfile.ducklake -t ${dockerImage}:${BUILD_VERSION} --no-cache .
+            docker build -f ci/Dockerfile.ducklake -t ${dockerImage}:${BUILD_VERSION} .
         """
 
         // Extract extension
