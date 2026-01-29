@@ -450,6 +450,44 @@ export interface SQLCompletionResponse {
 }
 
 // ============================================================================
+// Branch Changes Summary Types (for /changes endpoint)
+// ============================================================================
+// Shows aggregated snapshot changes since common ancestor between two branches
+
+export interface ChangeSummaryItem {
+  change_type: string;    // e.g., 'created_table', 'inserted_into_table', 'created_schema'
+  schema_name: string | null;
+  table_name: string | null;
+  change_count: number;
+}
+
+export interface CommonAncestor {
+  branch_id: number;
+  branch_name: string;
+  snapshot_id: number;
+  snapshot_time: string | null;  // ISO timestamp
+}
+
+export interface BranchSummarySet {
+  branch_name: string;
+  branch_id: number;
+  total_changes: number;
+  summaries?: ChangeSummaryItem[];  // Aggregated by change_type, schema_name, table_name
+}
+
+export interface BranchChangeSummary {
+  branch_name: string;
+  branch_id: number;
+  total_changes: number;
+}
+
+export interface BranchChangesResponse {
+  common_ancestor: CommonAncestor;
+  compare_branch_summary?: BranchSummarySet;
+  base_branch_summary?: BranchChangeSummary;
+}
+
+// ============================================================================
 // UI State Types
 // ============================================================================
 

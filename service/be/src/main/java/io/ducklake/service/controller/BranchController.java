@@ -301,4 +301,56 @@ public class BranchController {
             throw new BranchException("Failed to compute branch diff: " + e.getMessage(), e);
         }
     }
+
+    @GetMapping("/changes")
+    @Operation(summary = "Get branch changes", description = "Get snapshot changes since common ancestor between two branches")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Changes retrieved successfully"),
+            @ApiResponse(responseCode = "400", description = "Invalid branch names",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+            @ApiResponse(responseCode = "404", description = "Branch or catalog not found",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+            @ApiResponse(responseCode = "500", description = "Internal server error",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
+    })
+    public ResponseEntity<BranchChangesResponse> getBranchChanges(
+            @Parameter(description = "Catalog identifier") @PathVariable String catalogId,
+            @Parameter(description = "Base branch name") @RequestParam("base_branch") String baseBranch,
+            @Parameter(description = "Branch to compare") @RequestParam("compare_branch") String compareBranch,
+            @Parameter(description = "Maximum number of changes per branch") @RequestParam(defaultValue = "50") int limit,
+            @Parameter(description = "Offset for pagination") @RequestParam(defaultValue = "0") int offset) {
+        try {
+            log.info("Getting changes between {} and {} in catalog {}", baseBranch, compareBranch, catalogId);
+            BranchChangesResponse changes = branchService.getBranchChanges(catalogId, baseBranch, compareBranch, limit, offset);
+            return ResponseEntity.ok(changes);
+        } catch (SQLException e) {
+            log.error("Failed to get changes between {} and {} in catalog {}", baseBranch, compareBranch, catalogId, e);
+            throw new BranchException("Failed to get branch changes: " + e.getMessage(), e);
+        }
+    }
+
+    @GetMapping("/changes:count")
+    @Operation(summary = "Count branch changes", description = "Get count of snapshot changes since common ancestor between two branches")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Count retrieved successfully"),
+            @ApiResponse(responseCode = "400", description = "Invalid branch names",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+            @ApiResponse(responseCode = "404", description = "Branch or catalog not found",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+            @ApiResponse(responseCode = "500", description = "Internal server error",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
+    })
+    public ResponseEntity<BranchChangesResponse> getBranchChangesCount(
+            @Parameter(description = "Catalog identifier") @PathVariable String catalogId,
+            @Parameter(description = "Base branch name") @RequestParam("base_branch") String baseBranch,
+            @Parameter(description = "Branch to compare") @RequestParam("compare_branch") String compareBranch) {
+        try {
+            log.info("Counting changes between {} and {} in catalog {}", baseBranch, compareBranch, catalogId);
+            BranchChangesResponse changes = branchService.getBranchChangesCount(catalogId, baseBranch, compareBranch);
+            return ResponseEntity.ok(changes);
+        } catch (SQLException e) {
+            log.error("Failed to count changes between {} and {} in catalog {}", baseBranch, compareBranch, catalogId, e);
+            throw new BranchException("Failed to count branch changes: " + e.getMessage(), e);
+        }
+    }
 }

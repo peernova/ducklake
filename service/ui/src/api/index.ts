@@ -15,6 +15,7 @@ import type {
   CreateBranchRequest,
   BranchStats,
   BranchDiffResponse,
+  BranchChangesResponse,
   ListSchemasResponse,
   TableInfo,
   ListTablesResponse,
@@ -81,6 +82,21 @@ export const branchesApi = {
       compare_branch: compareBranch,
       ...options,
     }),
+
+  /** Get aggregated changes summary since common ancestor between two branches */
+  changes: (catalogId: string, baseBranch: string, compareBranch: string, options?: { limit?: number; offset?: number }) =>
+    api.get<BranchChangesResponse>(`/catalogs/${catalogId}/branches/changes`, {
+      base_branch: baseBranch,
+      compare_branch: compareBranch,
+      ...options,
+    }),
+
+  /** Get just counts of changes between two branches */
+  changesCount: (catalogId: string, baseBranch: string, compareBranch: string) =>
+    api.get<BranchChangesResponse>(`/catalogs/${catalogId}/branches/changes:count`, {
+      base_branch: baseBranch,
+      compare_branch: compareBranch,
+    }),
 };
 
 // =============================================================================
@@ -113,9 +129,9 @@ export const queryApi = {
   execute: (data: QueryRequest) =>
     api.post<QueryResponse>('/query', data),
 
-  /** Execute DDL/DML on a specific branch */
+  /** Execute DDL/DML on a specific branch - returns QueryResponse for SELECT, or row_count for DML */
   executeOnBranch: (catalogId: string, branchName: string, sql: string) =>
-    api.post<QueryResponse>(`/catalogs/${catalogId}/execute`, { branchName, sql }),
+    api.post<QueryResponse | { row_count: number; execution_time_ms: number; branch: string }>(`/catalogs/${catalogId}/execute`, { branch_name: branchName, sql }),
 };
 
 // =============================================================================

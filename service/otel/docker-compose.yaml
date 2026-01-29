@@ -59,11 +59,11 @@ services:
     profiles: [postgres]
     container_name: ducklake-postgres
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-ducklake}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ducklake}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: ${POSTGRES_DB:-ducklake_service}
     ports:
-      - "5434:5432"  # Changed to 5434 to avoid conflict
+      - "5433:5432"  # Port 5433 for gradle/java service
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./init-postgres.sql:/docker-entrypoint-initdb.d/init.sql:ro

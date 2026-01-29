@@ -416,6 +416,11 @@ export default function QueryV2() {
   const [branchSearch, setBranchSearch] = useState('');
   const branchDropdownRef = useRef<HTMLDivElement>(null);
 
+  // Catalog overflow dropdown
+  const [catalogOverflowOpen, setCatalogOverflowOpen] = useState(false);
+  const catalogOverflowRef = useRef<HTMLDivElement>(null);
+  const MAX_VISIBLE_CATALOGS = 3;
+
   // Schema metadata for autocomplete
   const [schemaMetadata, setSchemaMetadata] = useState<SchemaMetadata>({ schemas: [], tables: {}, columns: {} });
   const completionProviderRef = useRef<any>(null);
@@ -497,6 +502,9 @@ export default function QueryV2() {
       }
       if (branchDropdownRef.current && !branchDropdownRef.current.contains(e.target as Node)) {
         setBranchDropdownOpen(false);
+      }
+      if (catalogOverflowRef.current && !catalogOverflowRef.current.contains(e.target as Node)) {
+        setCatalogOverflowOpen(false);
       }
     };
     document.addEventListener('mousedown', handler);
@@ -603,6 +611,15 @@ export default function QueryV2() {
     editor.focus();
   }, []);
 
+  // Helper to detect DML/DDL statements
+  const isDmlOrDdl = (sql: string): boolean => {
+    const trimmed = sql.trim().toUpperCase();
+    // Remove comments and get first keyword
+    const withoutComments = trimmed.replace(/--.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '').trim();
+    const firstWord = withoutComments.split(/\s+/)[0];
+    return ['INSERT', 'UPDATE', 'DELETE', 'CREATE', 'DROP', 'ALTER', 'TRUNCATE', 'MERGE'].includes(firstWord);
+  };
+
   // Execute query using real API
   const executeQuery = useCallback(async () => {
     if (useCatalogs.size === 0) {
@@ -620,18 +637,44 @@ export default function QueryV2() {
         if (text?.trim()) sql = text;
       }
 
-      // Build branch context for all checked catalogs
-      const branchContext: Record<string, string> = {};
-      useCatalogs.forEach(catalogId => {
-        // Use selectedBranch for browsed catalog, 'main' for others
-        branchContext[catalogId] = catalogId === selectedCatalog ? selectedBranch : 'main';
-      });
+      // Check if this is a DML/DDL statement
+      if (isDmlOrDdl(sql)) {
+        // DML/DDL requires a single catalog - use the browsed catalog
+        if (!selectedCatalog) {
+          setError('Please select a catalog for DML/DDL statements');
+          return;
+        }
 
-      const res = await queryApi.execute({
-        sql,
-        branch_context: branchContext,
-      });
-      setResult(res);
+        const res = await queryApi.executeOnBranch(selectedCatalog, selectedBranch, sql);
+
+        // Execute returns QueryResponse for SELECT, or {row_count, execution_time_ms} for DML
+        if ('columns' in res && res.columns) {
+          // SELECT result - use as-is
+          setResult(res as unknown as QueryResponse);
+        } else {
+          // DML result - convert to display format
+          const rowCount = (res as any).row_count ?? 0;
+          setResult({
+            columns: [{ name: 'result', type: 'VARCHAR' }],
+            rows: [[`Success: ${rowCount} row${rowCount !== 1 ? 's' : ''} affected`]],
+            row_count: 1,
+            execution_time_ms: (res as any).execution_time_ms ?? 0,
+          });
+        }
+      } else {
+        // SELECT query - use query API with branch context
+        const branchContext: Record<string, string> = {};
+        useCatalogs.forEach(catalogId => {
+          // Use selectedBranch for browsed catalog, 'main' for others
+          branchContext[catalogId] = catalogId === selectedCatalog ? selectedBranch : 'main';
+        });
+
+        const res = await queryApi.execute({
+          sql,
+          branch_context: branchContext,
+        });
+        setResult(res);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Query failed');
       setResult(null);
@@ -911,13 +954,11 @@ export default function QueryV2() {
     wrapperBorderRadius: 0,
   });
 
-  // AG Grid columns - with minWidth for horizontal scrolling and type-aware formatting
-  const columnDefs: ColDef[] = (result?.columns.map((col, idx) => ({
+  // AG Grid columns - sized to content, not stretched
+  const columnDefs: ColDef[] = (result?.columns.map((col) => ({
     field: col.name,
     headerName: col.name.toUpperCase(),
-    minWidth: 120,
-    flex: idx === 0 ? 0 : 1,
-    width: idx === 0 ? 80 : undefined,
+    minWidth: 100,
     cellStyle: (params: any) => {
       // Right-align numbers
       if (typeof params.value === 'number') {
@@ -1092,7 +1133,13 @@ export default function QueryV2() {
                       ) : filteredCatalogs.map(c => (
                         <div
                           key={c.catalog_id}
-                          onClick={() => { setSelectedCatalog(c.catalog_id); setCatalogDropdownOpen(false); setCatalogSearch(''); }}
+                          onClick={() => {
+                            setSelectedCatalog(c.catalog_id);
+                            // Auto-check the catalog in toolbar
+                            setUseCatalogs(prev => new Set(prev).add(c.catalog_id));
+                            setCatalogDropdownOpen(false);
+                            setCatalogSearch('');
+                          }}
                           style={{
                             display: 'flex',
                             alignItems: 'center',
@@ -1278,9 +1325,17 @@ export default function QueryV2() {
           top: 0,
           zIndex: 10,
         }}>
-          {/* Catalog Checkboxes */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            {catalogs.map(c => {
+          {/* Catalog Checkboxes - Limited Display */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, maxWidth: 500 }}>
+            {/* Show selected catalog first, then others up to MAX_VISIBLE_CATALOGS */}
+            {(() => {
+              const selectedCat = catalogs.find(c => c.catalog_id === selectedCatalog);
+              const otherCats = catalogs.filter(c => c.catalog_id !== selectedCatalog);
+              const visibleCats = selectedCat
+                ? [selectedCat, ...otherCats.slice(0, MAX_VISIBLE_CATALOGS - 1)]
+                : catalogs.slice(0, MAX_VISIBLE_CATALOGS);
+              return visibleCats;
+            })().map(c => {
               const isChecked = useCatalogs.has(c.catalog_id);
               const isBrowsed = c.catalog_id === selectedCatalog;
               return (
@@ -1297,6 +1352,8 @@ export default function QueryV2() {
                     cursor: 'pointer',
                     border: '1px solid var(--border-color)',
                     opacity: isChecked ? 1 : 0.5,
+                    whiteSpace: 'nowrap',
+                    position: 'relative',
                   }}
                 >
                   <input
@@ -1315,20 +1372,150 @@ export default function QueryV2() {
                       margin: 0,
                       cursor: 'pointer',
                       accentColor: 'var(--accent-primary)',
+                      flexShrink: 0,
                     }}
                   />
-                  <Database size={12} style={{ color: 'var(--text-muted)' }} />
-                  <span>{c.display_name || c.catalog_id}</span>
+                  <Database size={12} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+                  <span
+                    className="branch-tooltip"
+                    data-tooltip={c.display_name || c.catalog_id}
+                    style={{ overflow: 'hidden', textOverflow: 'ellipsis', position: 'relative' }}
+                  >
+                    {(c.display_name || c.catalog_id).length > 12
+                      ? (c.display_name || c.catalog_id).slice(0, 12) + '…'
+                      : (c.display_name || c.catalog_id)}
+                  </span>
                   {isBrowsed && (
-                    <span style={{ display: 'flex', alignItems: 'center', gap: 4, marginLeft: 4, color: 'var(--text-muted)' }}>
+                    <span
+                      className="branch-tooltip"
+                      data-tooltip={selectedBranch}
+                      style={{ display: 'flex', alignItems: 'center', gap: 4, marginLeft: 4, color: 'var(--text-muted)', flexShrink: 0, cursor: 'default', position: 'relative' }}
+                    >
                       <span>@</span>
                       <GitBranch size={10} />
-                      <span style={{ fontSize: 11 }}>{selectedBranch}</span>
+                      <span style={{ fontSize: 11, minWidth: 40, maxWidth: 70, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {selectedBranch.length > 10 ? selectedBranch.slice(0, 10) + '…' : selectedBranch}
+                      </span>
                     </span>
                   )}
                 </label>
               );
             })}
+
+            {/* Overflow dropdown for additional catalogs */}
+            {catalogs.length > MAX_VISIBLE_CATALOGS && (
+              <div ref={catalogOverflowRef} style={{ position: 'relative' }}>
+                <button
+                  onClick={() => setCatalogOverflowOpen(!catalogOverflowOpen)}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 4,
+                    padding: '6px 10px',
+                    background: 'var(--bg-primary)',
+                    borderRadius: 6,
+                    fontSize: 12,
+                    cursor: 'pointer',
+                    border: '1px solid var(--border-color)',
+                    color: 'var(--text-secondary)',
+                  }}
+                >
+                  +{catalogs.length - MAX_VISIBLE_CATALOGS} more
+                  <ChevronDown size={12} style={{ transform: catalogOverflowOpen ? 'rotate(180deg)' : 'none' }} />
+                </button>
+
+                {catalogOverflowOpen && (
+                  <div style={{
+                    position: 'absolute',
+                    top: '100%',
+                    left: 0,
+                    marginTop: 4,
+                    background: 'var(--bg-secondary)',
+                    border: '1px solid var(--border-color)',
+                    borderRadius: 6,
+                    boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
+                    zIndex: 100,
+                    minWidth: 220,
+                    maxHeight: 300,
+                    overflowY: 'auto',
+                  }}>
+                    <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-color)', fontSize: 11, color: 'var(--text-muted)', fontWeight: 600, background: 'var(--bg-tertiary)' }}>
+                      All Catalogs ({catalogs.length})
+                    </div>
+                    {catalogs.map(c => {
+                      const isChecked = useCatalogs.has(c.catalog_id);
+                      const isBrowsed = c.catalog_id === selectedCatalog;
+                      return (
+                        <label
+                          key={c.catalog_id}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 8,
+                            padding: '8px 12px',
+                            cursor: 'pointer',
+                            fontSize: 12,
+                            background: isChecked ? 'rgba(99, 102, 241, 0.1)' : 'transparent',
+                          }}
+                          onMouseEnter={(e) => (e.currentTarget.style.background = isChecked ? 'rgba(99, 102, 241, 0.15)' : 'var(--bg-tertiary)')}
+                          onMouseLeave={(e) => (e.currentTarget.style.background = isChecked ? 'rgba(99, 102, 241, 0.1)' : 'transparent')}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={(e) => {
+                              const newSet = new Set(useCatalogs);
+                              if (e.target.checked) {
+                                newSet.add(c.catalog_id);
+                              } else {
+                                newSet.delete(c.catalog_id);
+                              }
+                              setUseCatalogs(newSet);
+                            }}
+                            style={{
+                              margin: 0,
+                              cursor: 'pointer',
+                              accentColor: 'var(--accent-primary)',
+                            }}
+                          />
+                          <Database size={12} style={{ color: isChecked ? 'var(--text-secondary)' : 'var(--text-muted)', opacity: 0.7 }} />
+                          <span style={{ flex: 1, color: isChecked ? 'var(--text-primary)' : 'var(--text-secondary)' }}>{c.display_name || c.catalog_id}</span>
+                          {isBrowsed && (
+                            <span
+                              className="branch-tooltip"
+                              data-tooltip={selectedBranch}
+                              style={{ display: 'flex', alignItems: 'center', gap: 2, color: 'var(--text-muted)', fontSize: 10, cursor: 'default', position: 'relative' }}
+                            >
+                              <GitBranch size={10} />
+                              {selectedBranch.length > 10 ? selectedBranch.slice(0, 10) + '…' : selectedBranch}
+                            </span>
+                          )}
+                        </label>
+                      );
+                    })}
+                    <div style={{ padding: '6px 12px', borderTop: '1px solid var(--border-color)', display: 'flex', gap: 8, background: 'var(--bg-tertiary)' }}>
+                      <button
+                        onClick={() => setUseCatalogs(new Set(catalogs.map(c => c.catalog_id)))}
+                        style={{ flex: 1, padding: '4px 8px', fontSize: 11, background: 'transparent', border: '1px solid var(--border-color)', borderRadius: 4, cursor: 'pointer', color: 'var(--text-muted)' }}
+                      >
+                        Select All
+                      </button>
+                      <button
+                        onClick={() => setUseCatalogs(new Set())}
+                        style={{ flex: 1, padding: '4px 8px', fontSize: 11, background: 'transparent', border: '1px solid var(--border-color)', borderRadius: 4, cursor: 'pointer', color: 'var(--text-muted)' }}
+                      >
+                        Clear All
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Summary badge */}
+            <span style={{ fontSize: 11, color: 'var(--text-muted)', padding: '4px 8px', background: 'var(--bg-tertiary)', borderRadius: 4 }}>
+              {useCatalogs.size}/{catalogs.length} selected
+            </span>
           </div>
 
           <div style={{ flex: 1 }} />
@@ -1562,6 +1749,7 @@ export default function QueryV2() {
                 pagination={result.row_count > 100}
                 paginationPageSize={100}
                 paginationPageSizeSelector={[50, 100, 200, 500]}
+                autoSizeStrategy={{ type: 'fitCellContents' }}
               />
             ) : (
               <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-muted)' }}>

@@ -15,11 +15,13 @@ import {
   Edit3,
   FolderOpen,
   Search,
+  FileText,
+  Database,
 } from 'lucide-react';
 import { AgGridReact } from 'ag-grid-react';
 import type { ColDef, ICellRendererParams } from 'ag-grid-community';
 import { branchesApi } from '../api';
-import type { Branch, BranchDiffResponse } from '../types';
+import type { Branch, BranchDiffResponse, BranchChangesResponse, ChangeSummaryItem } from '../types';
 
 interface BranchDiffTabProps {
   catalogId: string;
@@ -110,6 +112,585 @@ function ValueCellRenderer(props: ICellRendererParams & { isBase?: boolean }) {
   return <span style={{ color, fontFamily: 'monospace', fontSize: '12px' }}>{value}</span>;
 }
 
+// Changes Summary Modal with collapsible sections and search
+interface ChangesSummaryModalProps {
+  initialChangesSummary: BranchChangesResponse;
+  initialBaseBranch: string;
+  initialCompareBranch: string;
+  catalogId: string;
+  onClose: () => void;
+}
+
+function ChangesSummaryModal({ initialChangesSummary, initialBaseBranch, initialCompareBranch, catalogId, onClose }: ChangesSummaryModalProps) {
+  const [searchQuery, setSearchQuery] = useState('');
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(['schema', 'table', 'data']));
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const suggestionsRef = useRef<HTMLDivElement>(null);
+
+  // Local state for modal - independent of parent
+  const [localBaseBranch, setLocalBaseBranch] = useState(initialBaseBranch);
+  const [localCompareBranch, setLocalCompareBranch] = useState(initialCompareBranch);
+  const [changesSummary, setChangesSummary] = useState(initialChangesSummary);
+  const [loading, setLoading] = useState(false);
+
+  // Close suggestions when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (suggestionsRef.current && !suggestionsRef.current.contains(e.target as Node) &&
+          searchInputRef.current && !searchInputRef.current.contains(e.target as Node)) {
+        setShowSuggestions(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const { common_ancestor, compare_branch_summary, base_branch_summary } = changesSummary;
+  const summaries = compare_branch_summary?.summaries || [];
+
+  // Categorize changes
+  const categorizedChanges = useMemo(() => {
+    const schema: ChangeSummaryItem[] = [];
+    const table: ChangeSummaryItem[] = [];
+    const data: ChangeSummaryItem[] = [];
+    const other: ChangeSummaryItem[] = [];
+
+    summaries.forEach(item => {
+      const ct = item.change_type.toLowerCase();
+      if (ct.includes('schema')) {
+        schema.push(item);
+      } else if (ct.includes('table') && !ct.includes('insert') && !ct.includes('delete_from')) {
+        table.push(item);
+      } else if (ct.includes('insert') || ct.includes('delete_from') || ct.includes('update')) {
+        data.push(item);
+      } else {
+        other.push(item);
+      }
+    });
+
+    return { schema, table, data, other };
+  }, [summaries]);
+
+  // Filter based on search
+  const filteredChanges = useMemo(() => {
+    if (!searchQuery.trim()) return categorizedChanges;
+
+    const query = searchQuery.toLowerCase();
+    const filter = (items: ChangeSummaryItem[]) =>
+      items.filter(item =>
+        item.change_type.toLowerCase().includes(query) ||
+        (item.schema_name && item.schema_name.toLowerCase().includes(query)) ||
+        (item.table_name && item.table_name.toLowerCase().includes(query))
+      );
+
+    return {
+      schema: filter(categorizedChanges.schema),
+      table: filter(categorizedChanges.table),
+      data: filter(categorizedChanges.data),
+      other: filter(categorizedChanges.other),
+    };
+  }, [categorizedChanges, searchQuery]);
+
+  // Generate search suggestions
+  const suggestions = useMemo(() => {
+    if (!searchQuery.trim() || searchQuery.length < 1) return [];
+
+    const query = searchQuery.toLowerCase();
+    const results: Array<{ type: 'schema' | 'table' | 'change'; value: string; count?: number }> = [];
+    const seen = new Set<string>();
+
+    // Collect unique schemas, tables, and change types that match
+    summaries.forEach(item => {
+      if (item.schema_name && item.schema_name.toLowerCase().includes(query) && !seen.has(`s:${item.schema_name}`)) {
+        seen.add(`s:${item.schema_name}`);
+        results.push({ type: 'schema', value: item.schema_name });
+      }
+      if (item.table_name && item.table_name.toLowerCase().includes(query) && !seen.has(`t:${item.table_name}`)) {
+        seen.add(`t:${item.table_name}`);
+        results.push({ type: 'table', value: item.table_name });
+      }
+      if (item.change_type.toLowerCase().includes(query) && !seen.has(`c:${item.change_type}`)) {
+        seen.add(`c:${item.change_type}`);
+        const count = summaries.filter(s => s.change_type === item.change_type).reduce((a, b) => a + b.change_count, 0);
+        results.push({ type: 'change', value: item.change_type, count });
+      }
+    });
+
+    return results.slice(0, 8); // Limit suggestions
+  }, [searchQuery, summaries]);
+
+  const toggleSection = (section: string) => {
+    setExpandedSections(prev => {
+      const next = new Set(prev);
+      if (next.has(section)) next.delete(section);
+      else next.add(section);
+      return next;
+    });
+  };
+
+  const expandAllSections = () => setExpandedSections(new Set(['schema', 'table', 'data', 'other']));
+  const collapseAllSections = () => setExpandedSections(new Set());
+
+  const getChangeIcon = (changeType: string) => {
+    const ct = changeType.toLowerCase();
+    if (ct.includes('create')) return <Plus size={12} style={{ color: '#22c55e' }} />;
+    if (ct.includes('drop') || ct.includes('delete')) return <Minus size={12} style={{ color: '#ef4444' }} />;
+    if (ct.includes('alter') || ct.includes('update')) return <Edit3 size={12} style={{ color: '#f59e0b' }} />;
+    if (ct.includes('insert')) return <Plus size={12} style={{ color: '#3b82f6' }} />;
+    return <FileText size={12} style={{ color: 'var(--text-muted)' }} />;
+  };
+
+  const getChangeColor = (changeType: string) => {
+    const ct = changeType.toLowerCase();
+    if (ct.includes('create')) return { bg: 'rgba(34, 197, 94, 0.1)', border: 'rgba(34, 197, 94, 0.3)' };
+    if (ct.includes('drop') || ct.includes('delete')) return { bg: 'rgba(239, 68, 68, 0.1)', border: 'rgba(239, 68, 68, 0.3)' };
+    if (ct.includes('alter') || ct.includes('update')) return { bg: 'rgba(245, 158, 11, 0.1)', border: 'rgba(245, 158, 11, 0.3)' };
+    if (ct.includes('insert')) return { bg: 'rgba(59, 130, 246, 0.1)', border: 'rgba(59, 130, 246, 0.3)' };
+    return { bg: 'var(--bg-tertiary)', border: 'var(--border-color)' };
+  };
+
+  const formatChangeType = (ct: string) => {
+    return ct.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  };
+
+  const renderSection = (title: string, icon: React.ReactNode, items: ChangeSummaryItem[], sectionKey: string, color: string) => {
+    const isExpanded = expandedSections.has(sectionKey);
+    const totalCount = items.reduce((a, b) => a + b.change_count, 0);
+
+    if (items.length === 0) return null;
+
+    return (
+      <div style={{ marginBottom: '12px' }}>
+        <div
+          onClick={() => toggleSection(sectionKey)}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            padding: '10px 12px',
+            background: 'var(--bg-tertiary)',
+            borderRadius: isExpanded ? '8px 8px 0 0' : '8px',
+            cursor: 'pointer',
+            userSelect: 'none',
+            borderLeft: `3px solid ${color}`,
+          }}
+        >
+          {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+          {icon}
+          <span style={{ flex: 1, fontWeight: 600, fontSize: '13px' }}>{title}</span>
+          <span style={{
+            padding: '2px 8px',
+            background: color,
+            color: 'white',
+            borderRadius: '10px',
+            fontSize: '11px',
+            fontWeight: 600,
+          }}>
+            {items.length} type{items.length !== 1 ? 's' : ''} · {totalCount} change{totalCount !== 1 ? 's' : ''}
+          </span>
+        </div>
+
+        {isExpanded && (
+          <div style={{
+            border: '1px solid var(--border-color)',
+            borderTop: 'none',
+            borderRadius: '0 0 8px 8px',
+            overflow: 'hidden',
+          }}>
+            {items.map((item, idx) => {
+              const colors = getChangeColor(item.change_type);
+              return (
+                <div
+                  key={`${item.change_type}-${item.schema_name}-${item.table_name}-${idx}`}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px',
+                    padding: '10px 14px',
+                    background: colors.bg,
+                    borderBottom: idx < items.length - 1 ? '1px solid var(--border-light)' : 'none',
+                  }}
+                >
+                  {getChangeIcon(item.change_type)}
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                      <span style={{ fontWeight: 500, fontSize: '12px' }}>
+                        {formatChangeType(item.change_type)}
+                      </span>
+                      {item.schema_name && (
+                        <span style={{
+                          padding: '1px 6px',
+                          background: 'rgba(14, 165, 233, 0.15)',
+                          color: '#0ea5e9',
+                          borderRadius: '4px',
+                          fontSize: '10px',
+                          fontWeight: 500,
+                        }}>
+                          {item.schema_name}
+                        </span>
+                      )}
+                      {item.table_name && (
+                        <span style={{
+                          padding: '1px 6px',
+                          background: 'rgba(139, 92, 246, 0.15)',
+                          color: '#8b5cf6',
+                          borderRadius: '4px',
+                          fontSize: '10px',
+                          fontWeight: 500,
+                        }}>
+                          {item.table_name}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <span style={{
+                    fontWeight: 600,
+                    fontSize: '13px',
+                    color: 'var(--text-primary)',
+                    minWidth: '40px',
+                    textAlign: 'right',
+                  }}>
+                    ×{item.change_count}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const totalChanges = summaries.reduce((a, b) => a + b.change_count, 0);
+  const hasResults = filteredChanges.schema.length > 0 || filteredChanges.table.length > 0 ||
+                     filteredChanges.data.length > 0 || filteredChanges.other.length > 0;
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div
+        className="modal"
+        style={{
+          maxWidth: '700px',
+          width: '95vw',
+          maxHeight: '85vh',
+          display: 'flex',
+          flexDirection: 'column',
+        }}
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="modal-header" style={{ borderBottom: '1px solid var(--border-color)', padding: '16px 20px' }}>
+          <div style={{ flex: 1 }}>
+            <h3 className="modal-title" style={{ display: 'flex', alignItems: 'center', gap: '10px', margin: 0 }}>
+              <Database size={20} style={{ color: 'var(--accent-primary)' }} />
+              Changes Summary
+            </h3>
+            <div style={{ margin: '8px 0 0 0', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{
+                padding: '4px 10px',
+                background: 'var(--bg-tertiary)',
+                borderRadius: '6px',
+                fontSize: '12px',
+                fontWeight: 500,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+              }}>
+                <GitBranch size={12} style={{ color: 'var(--accent-primary)' }} />
+                {localBaseBranch}
+              </span>
+              <button
+                onClick={async () => {
+                  // Swap locally and re-fetch
+                  const newBase = localCompareBranch;
+                  const newCompare = localBaseBranch;
+                  setLocalBaseBranch(newBase);
+                  setLocalCompareBranch(newCompare);
+                  setLoading(true);
+                  try {
+                    const result = await branchesApi.changes(catalogId, newBase, newCompare);
+                    setChangesSummary(result);
+                  } catch (err) {
+                    console.error('Failed to fetch changes summary:', err);
+                  } finally {
+                    setLoading(false);
+                  }
+                }}
+                disabled={loading}
+                title="Swap base and compare branches"
+                style={{
+                  background: 'rgba(59, 130, 246, 0.15)',
+                  border: '1px solid #3b82f6',
+                  borderRadius: '6px',
+                  padding: '4px 8px',
+                  cursor: loading ? 'wait' : 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  color: '#3b82f6',
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  transition: 'all 0.15s ease',
+                  opacity: loading ? 0.6 : 1,
+                }}
+                onMouseEnter={(e) => {
+                  if (!loading) {
+                    e.currentTarget.style.background = '#3b82f6';
+                    e.currentTarget.style.color = 'white';
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = 'rgba(59, 130, 246, 0.15)';
+                  e.currentTarget.style.color = '#3b82f6';
+                }}
+              >
+                {loading ? <RefreshCw size={12} className="spin" /> : <RefreshCw size={12} />}
+                Swap
+              </button>
+              <span style={{
+                padding: '4px 10px',
+                background: 'rgba(139, 92, 246, 0.15)',
+                borderRadius: '6px',
+                fontSize: '12px',
+                fontWeight: 500,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                color: '#8b5cf6',
+              }}>
+                <GitBranch size={12} />
+                {localCompareBranch}
+              </span>
+            </div>
+          </div>
+          <button className="modal-close" onClick={onClose}>
+            <X size={20} />
+          </button>
+        </div>
+
+        {/* Common Ancestor Info */}
+        <div style={{
+          padding: '12px 20px',
+          background: 'var(--bg-tertiary)',
+          borderBottom: '1px solid var(--border-color)',
+          display: 'flex',
+          gap: '20px',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <GitBranch size={14} style={{ color: 'var(--accent-primary)' }} />
+            <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Common Ancestor:</span>
+            <span style={{ fontSize: '12px', fontWeight: 600 }}>{common_ancestor.branch_name}</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Snapshot:</span>
+            <span style={{ fontSize: '12px', fontWeight: 600, fontFamily: 'monospace' }}>#{common_ancestor.snapshot_id}</span>
+          </div>
+          {common_ancestor.snapshot_time && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>At:</span>
+              <span style={{ fontSize: '12px', fontFamily: 'monospace' }}>
+                {new Date(common_ancestor.snapshot_time).toLocaleString()}
+              </span>
+            </div>
+          )}
+          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{
+              padding: '4px 10px',
+              background: '#3b82f6',
+              color: 'white',
+              borderRadius: '12px',
+              fontSize: '12px',
+              fontWeight: 600,
+            }}>
+              {totalChanges} total change{totalChanges !== 1 ? 's' : ''}
+            </span>
+          </div>
+        </div>
+
+        {/* Search Bar + Toolbar */}
+        <div style={{ padding: '12px 20px', borderBottom: '1px solid var(--border-color)', position: 'relative', display: 'flex', gap: '10px', alignItems: 'center' }}>
+          <div style={{
+            flex: 1,
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            padding: '8px 12px',
+            background: 'var(--bg-secondary)',
+            border: '1px solid var(--border-color)',
+            borderRadius: '6px',
+          }}>
+            <Search size={16} style={{ color: 'var(--text-muted)' }} />
+            <input
+              ref={searchInputRef}
+              type="text"
+              placeholder="Search schemas, tables, change types..."
+              value={searchQuery}
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+                setShowSuggestions(true);
+              }}
+              onFocus={() => setShowSuggestions(true)}
+              style={{
+                flex: 1,
+                background: 'transparent',
+                border: 'none',
+                outline: 'none',
+                color: 'var(--text-primary)',
+                fontSize: '13px',
+              }}
+            />
+            {searchQuery && (
+              <button
+                onClick={() => { setSearchQuery(''); setShowSuggestions(false); }}
+                style={{ background: 'none', border: 'none', padding: '2px', cursor: 'pointer', color: 'var(--text-muted)' }}
+              >
+                <X size={14} />
+              </button>
+            )}
+          </div>
+
+          {/* Search Suggestions Dropdown */}
+          {showSuggestions && suggestions.length > 0 && (
+            <div
+              ref={suggestionsRef}
+              style={{
+                position: 'absolute',
+                top: '100%',
+                left: '20px',
+                right: '20px',
+                marginTop: '-4px',
+                background: 'var(--bg-primary)',
+                border: '1px solid var(--border-color)',
+                borderRadius: '0 0 6px 6px',
+                boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
+                maxHeight: '200px',
+                overflowY: 'auto',
+                zIndex: 10,
+              }}
+            >
+              {suggestions.map((sugg, idx) => (
+                <div
+                  key={`${sugg.type}-${sugg.value}-${idx}`}
+                  onClick={() => {
+                    setSearchQuery(sugg.value);
+                    setShowSuggestions(false);
+                  }}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    padding: '8px 12px',
+                    cursor: 'pointer',
+                    borderBottom: idx < suggestions.length - 1 ? '1px solid var(--border-light)' : 'none',
+                  }}
+                  onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-secondary)'}
+                  onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                >
+                  {sugg.type === 'schema' && <Folder size={14} style={{ color: '#0ea5e9' }} />}
+                  {sugg.type === 'table' && <Table size={14} style={{ color: '#8b5cf6' }} />}
+                  {sugg.type === 'change' && <FileText size={14} style={{ color: '#f59e0b' }} />}
+                  <span style={{ flex: 1, fontSize: '12px' }}>{sugg.value}</span>
+                  <span style={{
+                    fontSize: '10px',
+                    padding: '2px 6px',
+                    background: 'var(--bg-tertiary)',
+                    borderRadius: '4px',
+                    color: 'var(--text-muted)',
+                    textTransform: 'capitalize',
+                  }}>
+                    {sugg.type}
+                    {sugg.count !== undefined && ` (${sugg.count})`}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
+            <button className="btn btn-ghost btn-sm" onClick={expandAllSections}>
+              <ChevronDown size={12} /> Expand
+            </button>
+            <button className="btn btn-ghost btn-sm" onClick={collapseAllSections}>
+              <ChevronRight size={12} /> Collapse
+            </button>
+          </div>
+        </div>
+
+        {/* Content */}
+        <div className="modal-body" style={{ flex: 1, overflow: 'auto', padding: '16px 20px' }}>
+          {!hasResults ? (
+            <div style={{
+              padding: '40px',
+              textAlign: 'center',
+              color: 'var(--text-muted)',
+            }}>
+              {searchQuery ? `No changes matching "${searchQuery}"` : 'No changes found'}
+            </div>
+          ) : (
+            <>
+              {renderSection(
+                'Schema Changes',
+                <Folder size={16} style={{ color: '#0ea5e9' }} />,
+                filteredChanges.schema,
+                'schema',
+                '#0ea5e9'
+              )}
+              {renderSection(
+                'Table Changes',
+                <Table size={16} style={{ color: '#8b5cf6' }} />,
+                filteredChanges.table,
+                'table',
+                '#8b5cf6'
+              )}
+              {renderSection(
+                'Data Changes',
+                <Database size={16} style={{ color: '#3b82f6' }} />,
+                filteredChanges.data,
+                'data',
+                '#3b82f6'
+              )}
+              {renderSection(
+                'Other Changes',
+                <FileText size={16} style={{ color: '#64748b' }} />,
+                filteredChanges.other,
+                'other',
+                '#64748b'
+              )}
+            </>
+          )}
+
+        </div>
+
+        {/* Divergent changes note - pinned at bottom */}
+        {base_branch_summary && base_branch_summary.total_changes > 0 && (
+          <div style={{
+            padding: '10px 20px',
+            background: 'rgba(245, 158, 11, 0.1)',
+            borderTop: '1px solid rgba(245, 158, 11, 0.3)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            fontSize: '12px',
+          }}>
+            <GitBranch size={14} style={{ color: '#f59e0b' }} />
+            <span style={{ fontWeight: 600, color: '#f59e0b' }}>Note:</span>
+            <span style={{ color: 'var(--text-muted)' }}>
+              Base branch "{base_branch_summary.branch_name}" has {base_branch_summary.total_changes} change{base_branch_summary.total_changes !== 1 ? 's' : ''} since the common ancestor (divergent changes)
+            </span>
+          </div>
+        )}
+
+        {/* Footer */}
+        <div className="modal-footer" style={{ borderTop: '1px solid var(--border-color)', padding: '12px 20px' }}>
+          <button className="btn btn-secondary" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DetailModal({ type, title, baseBranch, compareBranch, items, onClose }: DetailModalProps) {
   // Flatten items for AG Grid (include children as separate rows with indentation)
   const rowData = useMemo(() => {
@@ -198,7 +779,7 @@ function DetailModal({ type, title, baseBranch, compareBranch, items, onClose }:
     },
   ], [baseBranch, compareBranch]);
 
-  const getRowStyle = (params: { data: { status: string; isChild: boolean } }) => {
+  const getRowStyle = (params: { data: { id: string; status: string; isChild: boolean } }) => {
     const status = params.data?.status;
     const isChild = params.data?.isChild;
     let bg = 'transparent';
@@ -322,6 +903,11 @@ export function BranchDiffTab({ catalogId, branches, currentBranch, compact = fa
     title: string;
     items: DetailModalProps['items'];
   } | null>(null);
+
+  // Changes summary state
+  const [changesSummary, setChangesSummary] = useState<BranchChangesResponse | null>(null);
+  const [showChangesSummary, setShowChangesSummary] = useState(false);
+  const [loadingChanges, setLoadingChanges] = useState(false);
 
   // Search state
   const [searchQuery, setSearchQuery] = useState('');
@@ -447,6 +1033,21 @@ export function BranchDiffTab({ catalogId, branches, currentBranch, compact = fa
       setDiffForBranches(null);
     } finally {
       setLoading(false);
+    }
+  }, [catalogId, baseBranch, compareBranch]);
+
+  const fetchChangesSummary = useCallback(async () => {
+    if (!baseBranch || !compareBranch || baseBranch === compareBranch) return;
+
+    setLoadingChanges(true);
+    try {
+      const result = await branchesApi.changes(catalogId, baseBranch, compareBranch);
+      setChangesSummary(result);
+      setShowChangesSummary(true);
+    } catch (err) {
+      console.error('Failed to fetch changes summary:', err);
+    } finally {
+      setLoadingChanges(false);
     }
   }, [catalogId, baseBranch, compareBranch]);
 
@@ -794,6 +1395,16 @@ export function BranchDiffTab({ catalogId, branches, currentBranch, compact = fa
         >
           {loading ? <RefreshCw size={16} className="spin" /> : <GitCompare size={16} />}
           {compact ? '' : 'Compare'}
+        </button>
+
+        <button
+          className="btn btn-secondary"
+          onClick={fetchChangesSummary}
+          disabled={loadingChanges || !compareBranch || baseBranch === compareBranch}
+          style={{ minWidth: compact ? '90px' : '140px' }}
+        >
+          {loadingChanges ? <RefreshCw size={16} className="spin" /> : <FileText size={16} />}
+          {compact ? '' : 'Changes Summary'}
         </button>
       </div>
 
@@ -1293,6 +1904,17 @@ export function BranchDiffTab({ catalogId, branches, currentBranch, compact = fa
           compareBranch={compareBranch}
           items={modalData.items}
           onClose={() => setModalData(null)}
+        />
+      )}
+
+      {/* Changes Summary Modal - Improved */}
+      {showChangesSummary && changesSummary && (
+        <ChangesSummaryModal
+          initialChangesSummary={changesSummary}
+          initialBaseBranch={baseBranch}
+          initialCompareBranch={compareBranch}
+          catalogId={catalogId}
+          onClose={() => setShowChangesSummary(false)}
         />
       )}
     </div>

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import ReactDOM from 'react-dom';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import {
@@ -371,8 +371,9 @@ function flattenBranchTree(
       return;
     }
     result.push(node);
-    // Don't traverse children if collapsed (unless searching/focused - always expand)
-    if (!search && !focusedNodes && collapsedSet.has(node.branch.branch_name)) {
+    // Don't traverse children if collapsed (unless searching - always expand when searching)
+    // Note: Focus mode should still respect collapse state
+    if (!search && collapsedSet.has(node.branch.branch_name)) {
       return;
     }
     node.children.forEach(traverse);
@@ -425,11 +426,15 @@ export default function CatalogDetail() {
   // Branch view mode (tree, table, or diagram)
   const [branchViewMode, setBranchViewMode] = useState<'tree' | 'table' | 'diagram'>('tree');
   const [branchSearch, setBranchSearch] = useState('');
+  const [branchSearchOpen, setBranchSearchOpen] = useState(false);
+  const [branchSearchHighlight, setBranchSearchHighlight] = useState(0);
   const [collapsedBranches, setCollapsedBranches] = useState<Set<string>>(new Set());
   const [focusedBranch, setFocusedBranch] = useState<string | null>(null); // For double-click filter
   const [hoveredBranch, setHoveredBranch] = useState<string | null>(null);
   const [mousePos, setMousePos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const mermaidRef = React.useRef<HTMLDivElement>(null);
+  const branchTreeRef = useRef<HTMLDivElement>(null);
+  const branchSearchRef = useRef<HTMLDivElement>(null);
 
   // Branch info modal state
   const [showBranchInfo, setShowBranchInfo] = useState(false);
@@ -521,6 +526,87 @@ export default function CatalogDetail() {
       fetchSchemas(selectedBranch);
     }
   }, [selectedBranch, fetchSchemas]);
+
+  // Filtered branches for type-ahead dropdown
+  const filteredBranches = useMemo(() => {
+    if (!branchSearch.trim()) return branches;
+    const search = branchSearch.toLowerCase();
+    return branches.filter(b => b.branch_name.toLowerCase().includes(search));
+  }, [branches, branchSearch]);
+
+  // Reset highlight when filtered results change
+  useEffect(() => {
+    setBranchSearchHighlight(0);
+  }, [filteredBranches.length]);
+
+  // Click outside handler for branch search dropdown
+  useEffect(() => {
+    if (!branchSearchOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (branchSearchRef.current && !branchSearchRef.current.contains(e.target as Node)) {
+        setBranchSearchOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [branchSearchOpen]);
+
+  // Keyboard handler for branch tree (arrow keys to collapse/expand)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Only handle if tree view is active and we have a selected branch
+      if (branchViewMode !== 'tree' || !selectedBranch) return;
+      // Don't handle if focus is in an input
+      if ((e.target as HTMLElement).tagName === 'INPUT') return;
+
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        // Collapse the selected branch
+        setCollapsedBranches(prev => {
+          const next = new Set(prev);
+          next.add(selectedBranch);
+          return next;
+        });
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        // Expand the selected branch
+        setCollapsedBranches(prev => {
+          const next = new Set(prev);
+          next.delete(selectedBranch);
+          return next;
+        });
+      } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+        e.preventDefault();
+        // Navigate between branches (don't use branchSearch - it's only for type-ahead)
+        const flatNodes = flattenBranchTree(buildBranchTree(branches), collapsedBranches, '', focusedBranch, branches);
+        const currentIndex = flatNodes.findIndex(n => n.branch.branch_name === selectedBranch);
+        if (currentIndex === -1) return;
+        const nextIndex = e.key === 'ArrowUp'
+          ? Math.max(0, currentIndex - 1)
+          : Math.min(flatNodes.length - 1, currentIndex + 1);
+        setSelectedBranch(flatNodes[nextIndex].branch.branch_name);
+        // Scroll into view
+        const nodeEl = branchTreeRef.current?.querySelector(`[data-branch="${flatNodes[nextIndex].branch.branch_name}"]`);
+        nodeEl?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [branchViewMode, selectedBranch, collapsedBranches, focusedBranch, branches]);
+
+  // Handle branch selection from type-ahead
+  const handleBranchTypeaheadSelect = (branchName: string) => {
+    setFocusedBranch(branchName);
+    setSelectedBranch(branchName);
+    setBranchSearchOpen(false);
+    // Expand the path to this branch
+    const ancestry = getAncestryPath(branches, branchName);
+    setCollapsedBranches(prev => {
+      const next = new Set(prev);
+      ancestry.forEach(name => next.delete(name));
+      return next;
+    });
+  };
 
   // =============================================================================
   // Actions
@@ -932,16 +1018,103 @@ export default function CatalogDetail() {
                 </div>
                 <div className="tab-header-right">
                   {(branchViewMode === 'tree' || branchViewMode === 'table') && (
-                    <div className="search-input-wrapper" style={{ position: 'relative' }}>
-                      <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-                      <input
-                        type="text"
-                        className="form-input"
-                        placeholder="Search branches..."
-                        value={branchSearch}
-                        onChange={(e) => setBranchSearch(e.target.value)}
-                        style={{ paddingLeft: '32px', width: '200px', height: '32px', fontSize: '12px' }}
-                      />
+                    <div ref={branchSearchRef} style={{ position: 'relative' }}>
+                      <div style={{ position: 'relative' }}>
+                        <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', zIndex: 1 }} />
+                        <input
+                          type="text"
+                          className="form-input"
+                          placeholder="Search branches..."
+                          value={branchSearch}
+                          onChange={(e) => {
+                            setBranchSearch(e.target.value);
+                            setBranchSearchOpen(true);
+                          }}
+                          onFocus={() => setBranchSearchOpen(true)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'ArrowDown') {
+                              e.preventDefault();
+                              setBranchSearchHighlight(prev => Math.min(prev + 1, filteredBranches.length - 1));
+                            } else if (e.key === 'ArrowUp') {
+                              e.preventDefault();
+                              setBranchSearchHighlight(prev => Math.max(prev - 1, 0));
+                            } else if (e.key === 'Enter' && filteredBranches.length > 0) {
+                              e.preventDefault();
+                              handleBranchTypeaheadSelect(filteredBranches[branchSearchHighlight].branch_name);
+                            } else if (e.key === 'Escape') {
+                              setBranchSearchOpen(false);
+                            }
+                          }}
+                          style={{ paddingLeft: '32px', width: '240px', height: '32px', fontSize: '12px' }}
+                        />
+                      </div>
+                      {branchSearchOpen && branchSearch.trim() && filteredBranches.length > 0 && (
+                        <div style={{
+                          position: 'absolute',
+                          top: '100%',
+                          left: 0,
+                          right: 0,
+                          marginTop: '4px',
+                          background: 'var(--bg-primary)',
+                          border: '1px solid var(--border-color)',
+                          borderRadius: '8px',
+                          boxShadow: 'var(--shadow-lg)',
+                          maxHeight: '300px',
+                          overflowY: 'auto',
+                          zIndex: 100,
+                        }}>
+                          {filteredBranches.slice(0, 20).map((branch, idx) => (
+                            <div
+                              key={branch.branch_id}
+                              onClick={() => handleBranchTypeaheadSelect(branch.branch_name)}
+                              style={{
+                                padding: '8px 12px',
+                                cursor: 'pointer',
+                                fontSize: '12px',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '8px',
+                                background: idx === branchSearchHighlight ? 'var(--bg-secondary)' : 'transparent',
+                                borderBottom: idx < filteredBranches.length - 1 ? '1px solid var(--border-light)' : 'none',
+                              }}
+                              onMouseEnter={() => setBranchSearchHighlight(idx)}
+                            >
+                              <GitBranch size={12} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+                              <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {branch.branch_name}
+                              </span>
+                              <span className={`badge badge-${branch.status}`} style={{ fontSize: '9px', padding: '1px 4px' }}>
+                                {branch.status}
+                              </span>
+                            </div>
+                          ))}
+                          {filteredBranches.length > 20 && (
+                            <div style={{ padding: '6px 12px', fontSize: '11px', color: 'var(--text-muted)', textAlign: 'center' }}>
+                              +{filteredBranches.length - 20} more results
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      {branchSearchOpen && branchSearch.trim() && filteredBranches.length === 0 && (
+                        <div style={{
+                          position: 'absolute',
+                          top: '100%',
+                          left: 0,
+                          right: 0,
+                          marginTop: '4px',
+                          background: 'var(--bg-primary)',
+                          border: '1px solid var(--border-color)',
+                          borderRadius: '8px',
+                          boxShadow: 'var(--shadow-lg)',
+                          padding: '12px',
+                          fontSize: '12px',
+                          color: 'var(--text-muted)',
+                          textAlign: 'center',
+                          zIndex: 100,
+                        }}>
+                          No branches found
+                        </div>
+                      )}
                     </div>
                   )}
                   <button
@@ -1009,15 +1182,33 @@ export default function CatalogDetail() {
                 </div>
               )}
 
+              {/* Keyboard shortcuts hint */}
+              {branchViewMode === 'tree' && !focusedBranch && (
+                <div style={{
+                  padding: '6px 12px',
+                  marginBottom: '8px',
+                  fontSize: '11px',
+                  color: 'var(--text-muted)',
+                  display: 'flex',
+                  gap: '16px',
+                }}>
+                  <span><kbd style={{ background: 'var(--bg-tertiary)', padding: '1px 4px', borderRadius: '3px', fontSize: '10px' }}>↑↓</kbd> Navigate</span>
+                  <span><kbd style={{ background: 'var(--bg-tertiary)', padding: '1px 4px', borderRadius: '3px', fontSize: '10px' }}>←→</kbd> Collapse/Expand</span>
+                  <span><kbd style={{ background: 'var(--bg-tertiary)', padding: '1px 4px', borderRadius: '3px', fontSize: '10px' }}>Double-click</kbd> Focus lineage</span>
+                </div>
+              )}
+
               {branchesLoading ? (
                 <div className="loading-inline">
                   <div className="spinner" />
                 </div>
               ) : branchViewMode === 'tree' ? (
-                <div className="branch-tree-v2" style={{ maxHeight: '500px', overflowY: 'auto', padding: '8px 0' }}>
+                <div ref={branchTreeRef} className="branch-tree-v2" style={{ maxHeight: '700px', overflowY: 'auto', padding: '8px 0' }}>
                   {(() => {
                     const ancestryPath = selectedBranch ? getAncestryPath(branches, selectedBranch) : new Set<string>();
-                    const flatNodes = flattenBranchTree(buildBranchTree(branches), collapsedBranches, branchSearch, focusedBranch, branches);
+                    // Don't pass branchSearch to tree - it's only for the type-ahead dropdown
+                    // This allows collapse/expand to work while searching
+                    const flatNodes = flattenBranchTree(buildBranchTree(branches), collapsedBranches, '', focusedBranch, branches);
 
                     return flatNodes.map((node, index, arr) => {
                       const { branch, depth, children } = node;
@@ -1050,6 +1241,7 @@ export default function CatalogDetail() {
                       return (
                         <div
                           key={branch.branch_id}
+                          data-branch={branch.branch_name}
                           className={`branch-node ${isSelected ? 'selected' : ''} ${isInPath ? 'in-path' : ''} ${isHovered ? 'hovered' : ''}`}
                           style={{
                             display: 'flex',

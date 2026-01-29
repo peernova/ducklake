@@ -3,6 +3,7 @@ add_library(
   base_metadata_function.cpp
   ducklake_add_data_files.cpp
   ducklake_analyze_query.cpp
+  ducklake_rewrite_query.cpp
   ducklake_branch_functions.cpp
   ducklake_cleanup_files.cpp
   ducklake_expire_snapshots.cpp
